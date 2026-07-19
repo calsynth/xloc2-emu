@@ -74,3 +74,6 @@ target_compile_options(firmware_core PRIVATE
 # headless test harness
 add_executable(headless test/headless.cpp)
 target_link_libraries(headless firmware_core)
+
+add_executable(dbg test/dbg.cpp)
+target_link_libraries(dbg firmware_core)

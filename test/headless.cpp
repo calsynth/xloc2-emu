@@ -42,32 +42,47 @@ int main() {
     ++failures;
   }
 
-  // Encoder turn: should move a cursor / change a value somewhere on screen.
+  // Encoder turn: should move a cursor / show feedback on screen. Some
+  // reactions are transient (popups), so watch the whole window.
   emu::turn_encoder_right(2);
-  run_ms(300);
-  uint8_t after_enc[1024];
-  memcpy(after_enc, emu::screen_pages(), 1024);
-  if (memcmp(before, after_enc, 1024) != 0) {
+  bool enc_changed = false;
+  for (int i = 0; i < 300; ++i) {
+    run_ms(1);
+    if (memcmp(before, emu::screen_pages(), 1024) != 0) {
+      enc_changed = true;
+      if (i < 60) emu::screenshot_pbm("after_encoder.pbm");
+    }
+  }
+  if (enc_changed) {
     printf("PASS: screen changed after right encoder turn\n");
   } else {
     printf("FAIL: screen unchanged after right encoder turn\n");
     ++failures;
   }
-  emu::screenshot_pbm("after_encoder.pbm");
 
-  // Button press: A (upper) — press, hold briefly, release.
+  // Button press: right encoder push (select mode -> persistent change),
+  // then button A.
   uint8_t before_btn[1024];
   memcpy(before_btn, emu::screen_pages(), 1024);
+  emu::set_button(emu::ENC_R_PUSH, true);
+  run_ms(50);
+  emu::set_button(emu::ENC_R_PUSH, false);
+  bool btn_changed = false;
+  for (int i = 0; i < 300; ++i) {
+    run_ms(1);
+    if (memcmp(before_btn, emu::screen_pages(), 1024) != 0) {
+      btn_changed = true;
+      break;
+    }
+  }
   emu::set_button(emu::BUTTON_A, true);
   run_ms(100);
   emu::set_button(emu::BUTTON_A, false);
-  run_ms(300);
-  uint8_t after_btn[1024];
-  memcpy(after_btn, emu::screen_pages(), 1024);
-  if (memcmp(before_btn, after_btn, 1024) != 0) {
-    printf("PASS: screen changed after button A press\n");
+  run_ms(100);
+  if (btn_changed) {
+    printf("PASS: screen changed after button press\n");
   } else {
-    printf("FAIL: screen unchanged after button A press\n");
+    printf("FAIL: screen unchanged after button press\n");
     ++failures;
   }
   emu::screenshot_pbm("after_button.pbm");

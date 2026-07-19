@@ -300,10 +300,45 @@ void eeprom_flush() {
 // Implemented in core/emu_main.cpp
 void firmware_setup();
 
+// First-run seeding: a factory-fresh module asks "Reset settings on EEPROM?"
+// and blocks on a button press *inside setup()*, which a headless boot can't
+// answer. Pre-seed a minimal valid global config (like a module that has
+// completed its first boot) so setup() runs through. Format mirrors
+// OC_apps.cpp SaveGlobalSettings(): METADATA_KEY = 1<<8, value packs
+// current_app_id[0..15] (0 -> firmware falls back to the default app),
+// encoder acceleration [16], and the v2.0 "valid" flag [17].
+static void seed_first_run_config() {
+  std::string cfg = state_dir_ + "/lfs/GLOBALS.CFG";
+  FILE* f = fopen(cfg.c_str(), "rb");
+  if (f) {
+    fclose(f);
+    return;  // config already exists
+  }
+  ::mkdir((state_dir_ + "/lfs").c_str(), 0755);
+  f = fopen(cfg.c_str(), "wb");
+  if (!f) return;
+  const uint16_t key = 1 << 8;
+  const uint64_t value = (1ull << 17) | (1ull << 16) | 0;
+  uint64_t checksum = value;
+  uint16_t record_count = 1;
+  // 12-byte header: signature "PZ", record count, checksum
+  uint8_t header[12] = {'P', 'Z'};
+  memcpy(header + 2, &record_count, 2);
+  memcpy(header + 4, &checksum, 8);
+  fwrite(header, 1, 12, f);
+  fwrite(&key, 2, 1, f);
+  fwrite(&value, 8, 1, f);
+  // empty "PX" data chunk
+  uint8_t header2[12] = {'P', 'X'};
+  fwrite(header2, 1, 12, f);
+  fclose(f);
+}
+
 void boot(const std::string& state_dir) {
   state_dir_ = state_dir;
   ::mkdir(state_dir.c_str(), 0755);
   eeprom_load();
+  seed_first_run_config();
 
   // Idle levels before the firmware polls anything:
   // buttons + encoder pins are INPUT_PULLUP, idle HIGH (XLOC2 pin map).
