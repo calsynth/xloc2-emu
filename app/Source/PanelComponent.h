@@ -70,10 +70,15 @@ class PanelComponent : public juce::Component, private juce::Timer {
   bool keyStateChanged(bool isKeyDown) override;
   void parentHierarchyChanged() override;
 
-  // Natural (and minimum) content size: both columns at full height with
-  // outer margins, the panel <-> sidebar gutter, and the bottom strip.
+  // Natural reference content size: both columns at full height with outer
+  // margins, the panel <-> sidebar gutter, and the bottom strip. The window
+  // shows this layout through a uniform scale transform (see Main.cpp).
   int naturalWidth() const;
   int naturalHeight() const;
+
+  // Effective on-screen scale of the content transform; the panel-art cache
+  // is re-rasterized at natural px * this so it stays crisp.
+  void setRenderScale(float scale);
 
  private:
   class Encoder;
@@ -89,6 +94,7 @@ class PanelComponent : public juce::Component, private juce::Timer {
 
   void timerCallback() override;
   void openRouting(JackId focus);
+  void refreshPanelCache();
   juce::Rectangle<float> panelBounds() const;
   // mm-centre + mm half-size -> pixel bounds on the fitted panel rect
   juce::Rectangle<int> placeMm(juce::Point<float> centreMm, float radiusMm) const;
@@ -98,7 +104,8 @@ class PanelComponent : public juce::Component, private juce::Timer {
 
   std::unique_ptr<juce::Drawable> panelSvg_;  // vector artwork (preferred)
   juce::Image panelArt_;     // raster artwork fallback (BinaryData PNG)
-  juce::Image panelScaled_;  // cached render for the current panel rect
+  juce::Image panelScaled_;  // cache at effective (transform-aware) px size
+  float renderScale_ = 1.0f;
 
   OledComponent oled_;
   std::unique_ptr<Encoder> encL_, encR_;

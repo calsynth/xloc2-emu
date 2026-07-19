@@ -40,20 +40,65 @@ class XLOC2Application : public juce::JUCEApplication {
 
   void systemRequestedQuit() override { quit(); }
 
+  // Shell that shows the natural-size layout through a uniform scale
+  // transform, centred in the window. Mouse hit-testing works through the
+  // transform (JUCE maps event coordinates automatically), so the whole UI
+  // stays usable on displays smaller than the natural 1331x1296 layout.
+  class ScaledShell : public juce::Component {
+   public:
+    explicit ScaledShell(EmuEngine& engine) : panel_(engine) {
+      panel_.setBounds(0, 0, panel_.naturalWidth(), panel_.naturalHeight());
+      addAndMakeVisible(panel_);
+    }
+
+    PanelComponent& panel() { return panel_; }
+
+    void paint(juce::Graphics& g) override {
+      g.fillAll(juce::Colour(0xff17181b));
+    }
+
+    void resized() override {
+      if (getWidth() <= 0 || getHeight() <= 0) return;
+      const float nw = (float)panel_.naturalWidth();
+      const float nh = (float)panel_.naturalHeight();
+      const float s =
+          juce::jmin((float)getWidth() / nw, (float)getHeight() / nh);
+      const float tx = ((float)getWidth() - nw * s) * 0.5f;
+      const float ty = ((float)getHeight() - nh * s) * 0.5f;
+      panel_.setTransform(juce::AffineTransform::scale(s).translated(tx, ty));
+      panel_.setRenderScale(s);
+    }
+
+   private:
+    PanelComponent panel_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ScaledShell)
+  };
+
   class MainWindow : public juce::DocumentWindow {
    public:
     MainWindow(const juce::String& name, EmuEngine& engine)
         : DocumentWindow(name, juce::Colour(0xff17181b),
                          DocumentWindow::allButtons) {
       setUsingNativeTitleBar(true);
-      auto* panel = new PanelComponent(engine);
-      setContentOwned(panel, true);
+      auto* shell = new ScaledShell(engine);
+      const int nw = shell->panel().naturalWidth();
+      const int nh = shell->panel().naturalHeight();
+      setContentOwned(shell, false);
       setResizable(true, true);
-      // natural two-column layout size is also the minimum: shrinking can
-      // never introduce a scrollbar or overlap
-      setResizeLimits(panel->naturalWidth(), panel->naturalHeight(), 4096,
-                      4096);
-      centreWithSize(panel->naturalWidth(), panel->naturalHeight());
+      setResizeLimits(640, 620, 8192, 8192);
+
+      // default: the natural layout scaled to ~90% of the usable display
+      // area, never above 1:1
+      float s = 1.0f;
+      if (auto* d =
+              juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) {
+        const auto ua = d->userArea;
+        s = juce::jmin(1.0f, 0.9f * (float)ua.getWidth() / (float)nw,
+                       0.9f * (float)ua.getHeight() / (float)nh);
+      }
+      centreWithSize(juce::roundToInt((float)nw * s),
+                     juce::roundToInt((float)nh * s));
       setVisible(true);
     }
 

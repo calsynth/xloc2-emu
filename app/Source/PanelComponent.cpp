@@ -449,31 +449,49 @@ juce::Rectangle<int> PanelComponent::placeMm(juce::Point<float> centreMm,
       .getSmallestIntegerContainer();
 }
 
+void PanelComponent::setRenderScale(float scale) {
+  if (std::abs(scale - renderScale_) < 0.001f) return;
+  renderScale_ = scale;
+  refreshPanelCache();
+  repaint();
+}
+
+// Rasterize the panel art at the EFFECTIVE pixel size — the natural-layout
+// rect times the content-scaling transform (and any desktop scale) — so the
+// cached image maps ~1:1 onto physical pixels and never blurs.
+void PanelComponent::refreshPanelCache() {
+  const auto pb = panelBounds();
+  float deviceScale = 1.0f;
+  if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+    deviceScale = (float)d->scale;
+  const float eff = juce::jmax(0.05f, renderScale_ * deviceScale);
+  const int pw = juce::roundToInt(pb.getWidth() * eff);
+  const int ph = juce::roundToInt(pb.getHeight() * eff);
+  if (pw <= 0 || ph <= 0 ||
+      (panelScaled_.getWidth() == pw && panelScaled_.getHeight() == ph))
+    return;
+  if (panelSvg_ != nullptr) {
+    // rasterize the vector art at target size (the SVG has no background
+    // rect, so paint the aluminum white first)
+    juce::Image img(juce::Image::ARGB, pw, ph, true);
+    juce::Graphics gi(img);
+    gi.fillAll(juce::Colours::white);
+    panelSvg_->drawWithin(gi,
+                          juce::Rectangle<float>(0, 0, (float)pw, (float)ph),
+                          juce::RectanglePlacement::stretchToFit, 1.0f);
+    panelScaled_ = img;
+  } else if (panelArt_.isValid()) {
+    panelScaled_ =
+        panelArt_.rescaled(pw, ph, juce::Graphics::highResamplingQuality);
+  }
+}
+
 void PanelComponent::resized() {
   const auto pb = panelBounds();
   const auto& L = layout_;
   const float s = pb.getWidth() / PanelLayout::widthMm;
 
-  // cache the artwork rendered at the current panel rect's exact pixel size
-  const int pw = juce::roundToInt(pb.getWidth());
-  const int ph = juce::roundToInt(pb.getHeight());
-  if (pw > 0 && ph > 0 &&
-      (panelScaled_.getWidth() != pw || panelScaled_.getHeight() != ph)) {
-    if (panelSvg_ != nullptr) {
-      // rasterize the vector art at target size (the SVG has no background
-      // rect, so paint the aluminum white first)
-      juce::Image img(juce::Image::ARGB, pw, ph, true);
-      juce::Graphics gi(img);
-      gi.fillAll(juce::Colours::white);
-      panelSvg_->drawWithin(gi,
-                            juce::Rectangle<float>(0, 0, (float)pw, (float)ph),
-                            juce::RectanglePlacement::stretchToFit, 1.0f);
-      panelScaled_ = img;
-    } else if (panelArt_.isValid()) {
-      panelScaled_ =
-          panelArt_.rescaled(pw, ph, juce::Graphics::highResamplingQuality);
-    }
-  }
+  refreshPanelCache();
 
   oled_.setBounds(juce::Rectangle<float>(pb.getX() + L.oled.getX() * s,
                                          pb.getY() + L.oled.getY() * s,
@@ -522,10 +540,14 @@ void PanelComponent::paint(juce::Graphics& g) {
   const auto pb = panelBounds();
 
   if (panelScaled_.isValid()) {
-    // real panel artwork, pre-scaled 1:1 onto the panel rect
+    // Real panel artwork. The cache is rasterized at the effective pixel
+    // size (natural px * content scale * desktop scale); drawing it into the
+    // natural-size rect through the transform maps it ~1:1 onto physical
+    // pixels, keeping the vector art crisp at any window scale.
+    juce::Graphics::ScopedSaveState ss(g);
     g.setOpacity(1.0f);
-    g.drawImageAt(panelScaled_, juce::roundToInt(pb.getX()),
-                  juce::roundToInt(pb.getY()));
+    g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+    g.drawImage(panelScaled_, pb, juce::RectanglePlacement::stretchToFit);
     g.setColour(juce::Colours::black.withAlpha(0.5f));
     g.drawRect(pb.expanded(1.0f), 1.0f);
   } else {
