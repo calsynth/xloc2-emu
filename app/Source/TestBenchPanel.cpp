@@ -1,5 +1,7 @@
 #include "TestBenchPanel.h"
 
+#include <juce_audio_utils/juce_audio_utils.h>  // AudioFormatManager
+
 #include "RoutingPanel.h"  // xloc2::routingFile()
 
 // ---------------------------------------------------------------------------
@@ -35,6 +37,15 @@ static juce::var benchToVar(const TestBenchConfig& cfg) {
     trig.add(juce::var(o));
   }
   tb->setProperty("trig", juce::var(trig));
+  {
+    auto* o = new juce::DynamicObject();
+    o->setProperty("path", cfg.wav.path);
+    o->setProperty("dest", cfg.wav.dest);
+    o->setProperty("peakVolts", cfg.wav.peakVolts);
+    o->setProperty("loop", cfg.wav.loop);
+    o->setProperty("playing", cfg.wav.playing);
+    tb->setProperty("wav", juce::var(o));
+  }
   return juce::var(tb);
 }
 
@@ -89,7 +100,39 @@ bool loadTestBench(TestBenchConfig& cfg) {
         d.rateHz = num(g, "rateHz", d.rateHz);
         d.pulseMs = num(g, "pulseMs", d.pulseMs);
       }
+  if (auto* w = tb->getProperty("wav").getDynamicObject()) {
+    cfg.wav.path = w->getProperty("path").toString();
+    cfg.wav.dest = (int)w->getProperty("dest");
+    cfg.wav.peakVolts = num(w, "peakVolts", cfg.wav.peakVolts);
+    cfg.wav.loop = (bool)w->getProperty("loop");
+    cfg.wav.playing = (bool)w->getProperty("playing");
+  }
   return true;
+}
+
+std::shared_ptr<const WavData> decodeAudioFile(const juce::File& f) {
+  if (!f.existsAsFile()) return nullptr;
+  juce::AudioFormatManager fm;
+  fm.registerBasicFormats();  // wav, aiff, flac, ogg, mp3 (per platform)
+  std::unique_ptr<juce::AudioFormatReader> reader(fm.createReaderFor(f));
+  if (reader == nullptr || reader->lengthInSamples <= 0 ||
+      reader->numChannels == 0)
+    return nullptr;
+  // cap at 10 minutes to keep memory sane; test files are small
+  const auto len = (int)juce::jmin<juce::int64>(
+      reader->lengthInSamples, (juce::int64)(reader->sampleRate * 600.0));
+  juce::AudioBuffer<float> buf((int)reader->numChannels, len);
+  reader->read(&buf, 0, len, 0, true, true);
+  auto wd = std::make_shared<WavData>();
+  wd->sampleRate = reader->sampleRate;
+  wd->mono.resize((size_t)len);
+  const float scale = 1.0f / (float)buf.getNumChannels();
+  for (int ch = 0; ch < buf.getNumChannels(); ++ch) {
+    const float* src = buf.getReadPointer(ch);
+    for (int i = 0; i < len; ++i)
+      wd->mono[(size_t)i] += src[i] * scale;  // mono mix
+  }
+  return wd;
 }
 
 }  // namespace xloc2
@@ -218,15 +261,31 @@ class TestBenchPanel::ScopeDisplay : public juce::Component,
     float step = 2.5f;
     while (span / step > 9.0f) step *= 2.0f;
     while (span / step < 3.0f && step > 0.01f) step *= 0.5f;
+    const int dec = step < 1.0f ? (step < 0.25f ? 2 : 1) : 0;
+    auto voltLabel = [&](float v, float y) {
+      // gridline label on the left edge, skipped when it would collide
+      // with the top readout area or the bottom edge
+      if (y < plot.getY() + 8.0f || y > plot.getBottom() - 6.0f) return;
+      juce::String t = juce::String(v, dec);
+      if (v > 0.0f) t = "+" + t;
+      g.setFont(juce::Font(juce::FontOptions(10.0f)));
+      g.drawText(t, (int)plot.getX() + 3, (int)(y - 11.0f), 40, 11,
+                 juce::Justification::bottomLeft);
+    };
     for (float v = std::ceil(vmin / step) * step; v <= vmax; v += step) {
       if (std::abs(v) < step * 0.25f) continue;  // zero drawn separately
       const float y = yOf(v);
       g.drawLine(plot.getX(), y, plot.getRight(), y, 0.6f);
+      g.setColour(juce::Colour(kDim).withAlpha(0.75f));
+      voltLabel(v, y);
+      g.setColour(juce::Colour(kGrid));
     }
     if (vmin < 0.0f && vmax > 0.0f) {
       g.setColour(juce::Colour(kGridZero));
       const float y0 = yOf(0.0f);
       g.drawLine(plot.getX(), y0, plot.getRight(), y0, 1.0f);
+      g.setColour(juce::Colour(kDim));
+      voltLabel(0.0f, y0);
     }
 
     // trace
@@ -278,11 +337,18 @@ class TestBenchPanel::ScopeDisplay : public juce::Component,
       g.drawText("FROZEN", (int)plot.getX() + 4, (int)plot.getY() + 2, 80, 14,
                  juce::Justification::topLeft);
     }
-    if (autoZoom_) {
+    // time-axis extent, bottom-right
+    {
+      const juce::String t =
+          windowS_ < 1.0
+              ? "0 .. " + juce::String(juce::roundToInt(windowS_ * 1000.0)) +
+                    " ms"
+              : "0 .. " + juce::String(windowS_, windowS_ < 10.0 ? 0 : 0) +
+                    " s";
       g.setColour(juce::Colour(kDim));
-      g.drawText(juce::String(vmin, 1) + " .. " + juce::String(vmax, 1) + " V",
-                 (int)plot.getX() + 4, (int)plot.getBottom() - 16, 140, 14,
-                 juce::Justification::bottomLeft);
+      g.setFont(juce::Font(juce::FontOptions(10.0f)));
+      g.drawText(t, (int)plot.getRight() - 90, (int)plot.getBottom() - 13, 86,
+                 12, juce::Justification::bottomRight);
     }
   }
 
@@ -398,20 +464,26 @@ class TestBenchPanel::CvGenRow : public juce::Component {
   }
 
   void resized() override {
-    auto r = getLocalBounds().reduced(0, 1);
+    auto r = getLocalBounds().reduced(0, 2);
     auto l1 = r.removeFromTop(r.getHeight() / 2);
     en_.setBounds(l1.removeFromLeft(22));
     idx_.setBounds(l1.removeFromLeft(14));
-    dest_.setBounds(l1.removeFromLeft(84).reduced(1));
-    wave_.setBounds(l1.removeFromLeft(92).reduced(1));
+    dest_.setBounds(l1.removeFromLeft(86).reduced(1));
+    l1.removeFromLeft(4);
+    wave_.setBounds(l1.removeFromLeft(96).reduced(1));
+    l1.removeFromLeft(4);
     freq_.setBounds(l1.reduced(1, 0));
+    r.removeFromTop(2);    // small gap between the two lines
     r.removeFromLeft(36);  // indent line 2
-    min_.setBounds(r.removeFromLeft(72).reduced(1, 1));
-    max_.setBounds(r.removeFromLeft(72).reduced(1, 1));
-    r.removeFromLeft(6);
-    uni_.setBounds(r.removeFromLeft(42).reduced(1, 1));
-    bi_.setBounds(r.removeFromLeft(38).reduced(1, 1));
-    full_.setBounds(r.removeFromLeft(42).reduced(1, 1));
+    min_.setBounds(r.removeFromLeft(74).reduced(1, 1));
+    r.removeFromLeft(3);
+    max_.setBounds(r.removeFromLeft(74).reduced(1, 1));
+    r.removeFromLeft(14);  // group separation before the presets
+    uni_.setBounds(r.removeFromLeft(46).reduced(1, 1));
+    r.removeFromLeft(2);
+    bi_.setBounds(r.removeFromLeft(42).reduced(1, 1));
+    r.removeFromLeft(2);
+    full_.setBounds(r.removeFromLeft(46).reduced(1, 1));
   }
 
  private:
@@ -513,12 +585,15 @@ class TestBenchPanel::TrigGenRow : public juce::Component {
   }
 
   void resized() override {
-    auto r = getLocalBounds().reduced(0, 1);
+    auto r = getLocalBounds().reduced(0, 2);
     en_.setBounds(r.removeFromLeft(22));
     idx_.setBounds(r.removeFromLeft(14));
-    dest_.setBounds(r.removeFromLeft(66).reduced(1));
-    fire_.setBounds(r.removeFromRight(38).reduced(1, 1));
-    pulse_.setBounds(r.removeFromRight(60).reduced(1, 1));
+    dest_.setBounds(r.removeFromLeft(70).reduced(1));
+    r.removeFromLeft(4);
+    fire_.setBounds(r.removeFromRight(42).reduced(1, 1));
+    r.removeFromRight(4);
+    pulse_.setBounds(r.removeFromRight(62).reduced(1, 1));
+    r.removeFromRight(4);
     bpm_.setBounds(r.removeFromRight(52));
     rate_.setBounds(r.reduced(1, 0));
   }
@@ -550,24 +625,24 @@ TestBenchPanel::TestBenchPanel(EmuEngine& engine) : engine_(engine) {
   styleTitle(scopeTitle_, "SCOPE");
   styleTitle(cvTitle_, "CV GENERATORS");
   styleTitle(trigTitle_, "TRIGGER GENERATORS");
-  addAndMakeVisible(scopeTitle_);
-  addAndMakeVisible(cvTitle_);
-  addAndMakeVisible(trigTitle_);
+  styleTitle(wavTitle_, "WAV PLAYER");
+  for (auto* l : {&scopeTitle_, &cvTitle_, &trigTitle_, &wavTitle_})
+    content_.addAndMakeVisible(*l);
 
   for (int i = 0; i < 20; ++i) scopeSource_.addItem(kScopeSourceNames[i], i + 1);
   scopeSource_.setSelectedId(9, juce::dontSendNotification);  // CV Out A
   scopeSource_.onChange = [this] { pushToEngine(); };
-  addAndMakeVisible(scopeSource_);
+  content_.addAndMakeVisible(scopeSource_);
 
   for (int i = 0; i < 5; ++i) scopeWindow_.addItem(kWindowNames[i], i + 1);
   scopeWindow_.setSelectedId(4, juce::dontSendNotification);  // 1 s
   scopeWindow_.onChange = [this] { pushToEngine(); };
-  addAndMakeVisible(scopeWindow_);
+  content_.addAndMakeVisible(scopeWindow_);
 
   for (auto* b : {&freezeButton_, &syncButton_, &zoomButton_}) {
     b->setClickingTogglesState(true);
     styleChip(*b);
-    addAndMakeVisible(*b);
+    content_.addAndMakeVisible(*b);
   }
   freezeButton_.setTooltip("Freeze the display");
   freezeButton_.onClick = [this] { applyScopeSettings(); };
@@ -578,22 +653,224 @@ TestBenchPanel::TestBenchPanel(EmuEngine& engine) : engine_(engine) {
   zoomButton_.onClick = [this] { pushToEngine(); };
 
   scope_ = std::make_unique<ScopeDisplay>(engine_);
-  addAndMakeVisible(*scope_);
+  content_.addAndMakeVisible(*scope_);
 
   syncAllButton_.setTooltip("Reset every generator's phase to 0");
   styleChip(syncAllButton_);
   syncAllButton_.onClick = [this] { engine_.postGenSync(); };
-  addAndMakeVisible(syncAllButton_);
+  content_.addAndMakeVisible(syncAllButton_);
 
   for (int i = 0; i < 8; ++i)
-    addAndMakeVisible(cvRows_.add(new CvGenRow(*this, i)));
+    content_.addAndMakeVisible(cvRows_.add(new CvGenRow(*this, i)));
   for (int i = 0; i < 4; ++i)
-    addAndMakeVisible(trigRows_.add(new TrigGenRow(*this, engine_, i)));
+    content_.addAndMakeVisible(trigRows_.add(new TrigGenRow(*this, engine_, i)));
+
+  // ---- wav player ----
+  styleChip(wavLoadButton_);
+  wavLoadButton_.onClick = [this] { chooseWavFile(); };
+  content_.addAndMakeVisible(wavLoadButton_);
+
+  wavFileLabel_.setText("(no file)", juce::dontSendNotification);
+  wavFileLabel_.setFont(juce::FontOptions(11.0f));
+  wavFileLabel_.setColour(juce::Label::textColourId, juce::Colour(kText));
+  wavFileLabel_.setMinimumHorizontalScale(0.7f);
+  content_.addAndMakeVisible(wavFileLabel_);
+
+  wavPlayButton_.setClickingTogglesState(true);
+  styleChip(wavPlayButton_);
+  wavPlayButton_.onClick = [this] {
+    wavPlayButton_.setButtonText(wavPlayButton_.getToggleState() ? "Pause"
+                                                                 : "Play");
+    // restart from the top when playing again after the file ended
+    if (wavPlayButton_.getToggleState() && !wavLoopButton_.getToggleState() &&
+        engine_.wavLengthSeconds() > 0.0 &&
+        engine_.wavPositionSeconds() >= engine_.wavLengthSeconds() - 1e-6)
+      engine_.wavSeekSeconds(0.0);
+    pushToEngine();
+  };
+  content_.addAndMakeVisible(wavPlayButton_);
+
+  styleChip(wavStopButton_);
+  wavStopButton_.onClick = [this] {
+    wavPlayButton_.setToggleState(false, juce::dontSendNotification);
+    wavPlayButton_.setButtonText("Play");
+    engine_.wavSeekSeconds(0.0);
+    pushToEngine();
+  };
+  content_.addAndMakeVisible(wavStopButton_);
+
+  wavLoopButton_.setClickingTogglesState(true);
+  styleChip(wavLoopButton_);
+  wavLoopButton_.onClick = [this] { pushToEngine(); };
+  content_.addAndMakeVisible(wavLoopButton_);
+
+  wavPos_.setSliderStyle(juce::Slider::LinearHorizontal);
+  wavPos_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+  wavPos_.setRange(0.0, 1.0, 0.0);
+  wavPos_.onValueChange = [this] {
+    if (wavPos_.isMouseButtonDown())  // user scrub, not timer update
+      engine_.wavSeekSeconds(wavPos_.getValue());
+  };
+  content_.addAndMakeVisible(wavPos_);
+
+  wavTimeLabel_.setFont(juce::FontOptions(11.0f));
+  wavTimeLabel_.setColour(juce::Label::textColourId, juce::Colour(kDim));
+  wavTimeLabel_.setJustificationType(juce::Justification::centredRight);
+  content_.addAndMakeVisible(wavTimeLabel_);
+
+  wavDestLabel_.setText("to", juce::dontSendNotification);
+  wavDestLabel_.setFont(juce::FontOptions(11.0f));
+  wavDestLabel_.setColour(juce::Label::textColourId, juce::Colour(kDim));
+  content_.addAndMakeVisible(wavDestLabel_);
+
+  wavDest_.addItem("None", 1);
+  for (int i = 0; i < 8; ++i)
+    wavDest_.addItem("CV In " + juce::String(i + 1), i + 2);
+  wavDest_.addItem("Audio In L", 10);
+  wavDest_.addItem("Audio In R", 11);
+  wavDest_.setItemEnabled(10, false);  // audio applets in a later phase
+  wavDest_.setItemEnabled(11, false);
+  wavDest_.setTooltip("Destination jack (Audio In: audio applets in a later phase)");
+  wavDest_.setSelectedId(1, juce::dontSendNotification);
+  wavDest_.onChange = [this] { pushToEngine(); };
+  content_.addAndMakeVisible(wavDest_);
+
+  wavLevelLabel_.setText("peak", juce::dontSendNotification);
+  wavLevelLabel_.setFont(juce::FontOptions(11.0f));
+  wavLevelLabel_.setColour(juce::Label::textColourId, juce::Colour(kDim));
+  content_.addAndMakeVisible(wavLevelLabel_);
+
+  wavLevel_.setSliderStyle(juce::Slider::LinearBar);
+  wavLevel_.setRange(0.1, 10.0, 0.1);
+  wavLevel_.setNumDecimalPlacesToDisplay(1);
+  wavLevel_.setTextValueSuffix(" V");
+  wavLevel_.setValue(5.0, juce::dontSendNotification);
+  wavLevel_.setTooltip("Full-scale sample maps to +- this many volts");
+  wavLevel_.setColour(juce::Slider::trackColourId, juce::Colour(0xff2b3242));
+  wavLevel_.onValueChange = [this] { pushToEngine(); };
+  content_.addAndMakeVisible(wavLevel_);
+
+  monitorButton_.setClickingTogglesState(true);
+  styleChip(monitorButton_);
+  monitorButton_.setTooltip(
+      "Hear what the module hears on the computer's speakers "
+      "(separate output-only device)");
+  monitorButton_.onClick = [this] {
+    engine_.setMonitorEnabled(monitorButton_.getToggleState());
+    refreshMonitorDevices();
+  };
+  content_.addAndMakeVisible(monitorButton_);
+
+  monitorVol_.setSliderStyle(juce::Slider::LinearHorizontal);
+  monitorVol_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+  monitorVol_.setRange(0.0, 1.0, 0.0);
+  monitorVol_.setValue(0.7, juce::dontSendNotification);
+  monitorVol_.setTooltip("Monitor volume");
+  monitorVol_.onValueChange = [this] {
+    engine_.setMonitorVolume((float)monitorVol_.getValue());
+  };
+  content_.addAndMakeVisible(monitorVol_);
+
+  monitorDevice_.setTooltip("Monitor output device");
+  monitorDevice_.setTextWhenNoChoicesAvailable("(no output device)");
+  monitorDevice_.onChange = [this] {
+    if (updating_) return;
+    auto setup = engine_.monitorDeviceManager().getAudioDeviceSetup();
+    setup.outputDeviceName = monitorDevice_.getText();
+    engine_.monitorDeviceManager().setAudioDeviceSetup(setup, true);
+  };
+  content_.addAndMakeVisible(monitorDevice_);
+
+  viewport_.setViewedComponent(&content_, false);
+  viewport_.setScrollBarsShown(true, false);
+  viewport_.setScrollBarThickness(8);
+  addAndMakeVisible(viewport_);
 
   loadFromConfig(engine_.getTestBench());
+
+  // restore the last wav file (decode on the message thread; files are small)
+  {
+    const auto cfg = engine_.getTestBench();
+    if (cfg.wav.path.isNotEmpty()) setWavFile(juce::File(cfg.wav.path));
+  }
+
+  startTimerHz(10);
 }
 
 TestBenchPanel::~TestBenchPanel() = default;
+
+void TestBenchPanel::timerCallback() {
+  // wav position + time readout
+  const double len = engine_.wavLengthSeconds();
+  const double pos = engine_.wavPositionSeconds();
+  if (len > 0.0) {
+    if (!wavPos_.isMouseButtonDown()) {
+      if (std::abs(wavPos_.getMaximum() - len) > 1e-9)
+        wavPos_.setRange(0.0, len, 0.0);
+      wavPos_.setValue(juce::jmin(pos, len), juce::dontSendNotification);
+    }
+    auto fmt = [](double s) {
+      const int m = (int)s / 60;
+      return juce::String(m) + ":" +
+             juce::String(s - m * 60.0, 1).paddedLeft('0', 4);
+    };
+    wavTimeLabel_.setText(fmt(pos) + " / " + fmt(len),
+                          juce::dontSendNotification);
+  } else {
+    wavTimeLabel_.setText(juce::String(), juce::dontSendNotification);
+  }
+
+  // monitor availability feedback
+  if (monitorButton_.getToggleState() && !engine_.monitorAvailable())
+    monitorButton_.setButtonText("Monitor (no device)");
+  else
+    monitorButton_.setButtonText("Monitor");
+}
+
+void TestBenchPanel::chooseWavFile() {
+  chooser_ = std::make_unique<juce::FileChooser>(
+      "Load audio file", wavFile_.exists() ? wavFile_.getParentDirectory()
+                                           : juce::File(),
+      "*.wav;*.aif;*.aiff;*.flac");
+  chooser_->launchAsync(juce::FileBrowserComponent::openMode |
+                            juce::FileBrowserComponent::canSelectFiles,
+                        [this](const juce::FileChooser& fc) {
+                          const auto f = fc.getResult();
+                          if (f.existsAsFile()) {
+                            setWavFile(f);
+                            pushToEngine();
+                          }
+                        });
+}
+
+void TestBenchPanel::setWavFile(const juce::File& f) {
+  auto data = xloc2::decodeAudioFile(f);
+  if (data == nullptr) {
+    wavFileLabel_.setText("failed: " + f.getFileName(),
+                          juce::dontSendNotification);
+    return;
+  }
+  wavFile_ = f;
+  const double secs = (double)data->mono.size() / data->sampleRate;
+  wavFileLabel_.setText(f.getFileName() + "  (" + juce::String(secs, 1) +
+                            " s, " + juce::String(data->sampleRate / 1000.0, 1) +
+                            " kHz)",
+                        juce::dontSendNotification);
+  engine_.setWavData(std::move(data));
+}
+
+void TestBenchPanel::refreshMonitorDevices() {
+  updating_ = true;
+  monitorDevice_.clear(juce::dontSendNotification);
+  if (auto* type = engine_.monitorDeviceManager().getCurrentDeviceTypeObject()) {
+    const auto names = type->getDeviceNames(false);  // output devices
+    for (int i = 0; i < names.size(); ++i)
+      monitorDevice_.addItem(names[i], i + 1);
+    if (auto* dev = engine_.monitorDeviceManager().getCurrentAudioDevice())
+      monitorDevice_.setText(dev->getName(), juce::dontSendNotification);
+  }
+  updating_ = false;
+}
 
 void TestBenchPanel::loadFromConfig(const TestBenchConfig& cfg) {
   updating_ = true;
@@ -605,6 +882,12 @@ void TestBenchPanel::loadFromConfig(const TestBenchConfig& cfg) {
   syncButton_.setToggleState(cfg.scopeSync, juce::dontSendNotification);
   for (int i = 0; i < 8; ++i) cvRows_[i]->set(cfg.cv[(size_t)i]);
   for (int i = 0; i < 4; ++i) trigRows_[i]->set(cfg.trig[(size_t)i]);
+  wavDest_.setSelectedId(juce::jlimit(-1, 7, cfg.wav.dest) + 2,
+                         juce::dontSendNotification);
+  wavLevel_.setValue(cfg.wav.peakVolts, juce::dontSendNotification);
+  wavLoopButton_.setToggleState(cfg.wav.loop, juce::dontSendNotification);
+  wavPlayButton_.setToggleState(cfg.wav.playing, juce::dontSendNotification);
+  wavPlayButton_.setButtonText(cfg.wav.playing ? "Pause" : "Play");
   refreshDestMarks();
   updating_ = false;
   applyScopeSettings();
@@ -641,6 +924,14 @@ void TestBenchPanel::pushToEngine() {
   cfg.scopeSync = syncButton_.getToggleState();
   for (int i = 0; i < 8; ++i) cfg.cv[(size_t)i] = cvRows_[i]->get();
   for (int i = 0; i < 4; ++i) cfg.trig[(size_t)i] = trigRows_[i]->get();
+  cfg.wav.path = wavFile_.existsAsFile() ? wavFile_.getFullPathName()
+                                         : juce::String();
+  cfg.wav.dest = wavDest_.getSelectedId() >= 2 && wavDest_.getSelectedId() <= 9
+                     ? wavDest_.getSelectedId() - 2
+                     : -1;
+  cfg.wav.peakVolts = (float)wavLevel_.getValue();
+  cfg.wav.loop = wavLoopButton_.getToggleState();
+  cfg.wav.playing = wavPlayButton_.getToggleState();
   engine_.setTestBench(cfg);
   xloc2::saveTestBench(cfg);
   refreshDestMarks();
@@ -654,27 +945,82 @@ void TestBenchPanel::paint(juce::Graphics& g) {
 }
 
 void TestBenchPanel::resized() {
-  auto r = getLocalBounds().reduced(10, 8);
+  viewport_.setBounds(getLocalBounds());
+  layoutContent();
+}
 
-  scopeTitle_.setBounds(r.removeFromTop(16));
-  auto c1 = r.removeFromTop(24);
-  scopeSource_.setBounds(c1.removeFromLeft(120).reduced(1));
-  scopeWindow_.setBounds(c1.removeFromLeft(82).reduced(1));
-  freezeButton_.setBounds(c1.removeFromLeft(62).reduced(1, 1));
-  syncButton_.setBounds(c1.removeFromLeft(52).reduced(1, 1));
-  zoomButton_.setBounds(c1.removeFromLeft(52).reduced(1, 1));
-  r.removeFromTop(4);
-  scope_->setBounds(r.removeFromTop(juce::jmin(230, r.getHeight() / 3)));
-  r.removeFromTop(8);
+// Lay the sections out top-to-bottom inside the scrollable content with
+// generous breathing room; the content grows past the viewport if needed.
+void TestBenchPanel::layoutContent() {
+  const int w = juce::jmax(280, getWidth() - viewport_.getScrollBarThickness());
 
-  auto h1 = r.removeFromTop(20);
-  syncAllButton_.setBounds(h1.removeFromRight(70).reduced(0, 1));
+  // measure required height first
+  const int scopeH = 340;               // ~1.5x the previous display height
+  const int cvRowH = 52, cvGap = 6;     // two-line rows + inter-row gap
+  const int trigRowH = 28, trigGap = 4;
+  int total = 10 + 18 + 28 + 6 + scopeH + 16;             // scope section
+  total += 24 + 8 * (cvRowH + cvGap) + 12;                // cv generators
+  total += 22 + 4 * (trigRowH + trigGap) + 12;            // trig generators
+  total += 22 + 28 + 28 + 26 + 4 + 26 + 10;               // wav player
+  content_.setSize(w, total);
+
+  auto r = content_.getLocalBounds().reduced(12, 10);
+
+  scopeTitle_.setBounds(r.removeFromTop(18));
+  auto c1 = r.removeFromTop(26);
+  scopeSource_.setBounds(c1.removeFromLeft(130).reduced(1, 1));
+  c1.removeFromLeft(4);
+  scopeWindow_.setBounds(c1.removeFromLeft(86).reduced(1, 1));
+  c1.removeFromLeft(4);
+  freezeButton_.setBounds(c1.removeFromLeft(64).reduced(1, 2));
+  c1.removeFromLeft(2);
+  syncButton_.setBounds(c1.removeFromLeft(54).reduced(1, 2));
+  c1.removeFromLeft(2);
+  zoomButton_.setBounds(c1.removeFromLeft(54).reduced(1, 2));
+  r.removeFromTop(6);
+  scope_->setBounds(r.removeFromTop(scopeH));
+  r.removeFromTop(16);
+
+  auto h1 = r.removeFromTop(24);
+  syncAllButton_.setBounds(h1.removeFromRight(72).reduced(0, 2));
   cvTitle_.setBounds(h1);
-  const int cvRowH = juce::jlimit(38, 46, (r.getHeight() - 150) / 8);
-  for (auto* row : cvRows_) row->setBounds(r.removeFromTop(cvRowH));
-  r.removeFromTop(8);
+  for (auto* row : cvRows_) {
+    row->setBounds(r.removeFromTop(cvRowH));
+    r.removeFromTop(cvGap);
+  }
+  r.removeFromTop(12);
 
-  trigTitle_.setBounds(r.removeFromTop(18));
-  for (auto* row : trigRows_)
-    row->setBounds(r.removeFromTop(juce::jmin(26, r.getHeight() / 4)));
+  trigTitle_.setBounds(r.removeFromTop(22));
+  for (auto* row : trigRows_) {
+    row->setBounds(r.removeFromTop(trigRowH));
+    r.removeFromTop(trigGap);
+  }
+  r.removeFromTop(12);
+
+  // ---- wav player ----
+  wavTitle_.setBounds(r.removeFromTop(22));
+  auto w1 = r.removeFromTop(28);
+  wavLoadButton_.setBounds(w1.removeFromLeft(64).reduced(1, 3));
+  w1.removeFromLeft(6);
+  wavFileLabel_.setBounds(w1);
+  auto w2 = r.removeFromTop(28);
+  wavPlayButton_.setBounds(w2.removeFromLeft(56).reduced(1, 3));
+  wavStopButton_.setBounds(w2.removeFromLeft(52).reduced(1, 3));
+  wavLoopButton_.setBounds(w2.removeFromLeft(52).reduced(1, 3));
+  w2.removeFromLeft(4);
+  wavTimeLabel_.setBounds(w2.removeFromRight(96));
+  wavPos_.setBounds(w2.reduced(0, 2));
+  auto w3 = r.removeFromTop(26);
+  wavDestLabel_.setBounds(w3.removeFromLeft(18));
+  wavDest_.setBounds(w3.removeFromLeft(110).reduced(1, 2));
+  w3.removeFromLeft(12);
+  wavLevelLabel_.setBounds(w3.removeFromLeft(32));
+  wavLevel_.setBounds(w3.removeFromLeft(76).reduced(1, 3));
+  r.removeFromTop(4);
+  auto w4 = r.removeFromTop(26);
+  monitorButton_.setBounds(w4.removeFromLeft(122).reduced(1, 2));
+  w4.removeFromLeft(4);
+  monitorVol_.setBounds(w4.removeFromLeft(90).reduced(0, 2));
+  w4.removeFromLeft(6);
+  monitorDevice_.setBounds(w4.reduced(1, 2));
 }

@@ -85,8 +85,9 @@ class PanelComponent : public juce::Component, private juce::Timer {
   EmuEngine& engine_;
   PanelLayout layout_;
 
-  juce::Image panelArt_;     // full-res artwork from BinaryData
-  juce::Image panelScaled_;  // cached rescale for the current panel rect
+  std::unique_ptr<juce::Drawable> panelSvg_;  // vector artwork (preferred)
+  juce::Image panelArt_;     // raster artwork fallback (BinaryData PNG)
+  juce::Image panelScaled_;  // cached render for the current panel rect
 
   OledComponent oled_;
   std::unique_ptr<Encoder> encL_, encR_;

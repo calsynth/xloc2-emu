@@ -61,6 +61,7 @@ void EmuEngine::start(const juce::XmlElement* savedAudioState) {
 
 void EmuEngine::stop() {
   stopping_.store(true, std::memory_order_relaxed);
+  setMonitorEnabled(false);
   deviceManager_.removeAudioCallback(this);
   deviceManager_.closeAudioDevice();
   fallback_.stopTimer();
@@ -104,10 +105,93 @@ void EmuEngine::setTestBench(const TestBenchConfig& b) {
   uint32_t cm = 0, tm = 0;
   for (const auto& g : b.cv)
     if (g.enabled && g.dest >= 0 && g.dest < 8) cm |= 1u << g.dest;
+  if (b.wav.dest >= 0 && b.wav.dest < 8) cm |= 1u << b.wav.dest;
   for (const auto& g : b.trig)
     if (g.enabled && g.dest >= 0 && g.dest < 4) tm |= 1u << g.dest;
   genCvMask_.store(cm, std::memory_order_relaxed);
   genTrigMask_.store(tm, std::memory_order_relaxed);
+}
+
+void EmuEngine::setWavData(std::shared_ptr<const WavData> data) {
+  double len = 0.0;
+  if (data != nullptr && data->sampleRate > 0.0)
+    len = (double)data->mono.size() / data->sampleRate;
+  {
+    juce::SpinLock::ScopedLockType l(benchLock_);
+    wavData_ = std::move(data);
+  }
+  wavLen_.store(len, std::memory_order_relaxed);
+  wavSeek_.store(0.0, std::memory_order_relaxed);  // restart from the top
+}
+
+void EmuEngine::wavSeekSeconds(double seconds) {
+  wavSeek_.store(juce::jmax(0.0, seconds), std::memory_order_relaxed);
+}
+
+bool EmuEngine::monitorAvailable() const {
+  return const_cast<juce::AudioDeviceManager&>(monitorManager_)
+             .getCurrentAudioDevice() != nullptr;
+}
+
+void EmuEngine::setMonitorEnabled(bool on) {
+  if (on == monitorEnabled_.load(std::memory_order_relaxed)) return;
+  if (on) {
+    // output-only, default system device; never touches the emulation device
+    monitorManager_.initialiseWithDefaultDevices(0, 2);
+    monitorManager_.addAudioCallback(&monitorCb_);
+    monitorEnabled_.store(true, std::memory_order_relaxed);
+  } else {
+    monitorEnabled_.store(false, std::memory_order_relaxed);
+    monitorManager_.removeAudioCallback(&monitorCb_);
+    monitorManager_.closeAudioDevice();
+  }
+}
+
+void EmuEngine::MonitorCallback::audioDeviceAboutToStart(
+    juce::AudioIODevice* d) {
+  deviceRate = d->getCurrentSampleRate();
+  primed = false;
+}
+
+// Monitor thread: pull from the SPSC ring at the emulation quantum rate,
+// nearest-sample resampled to the device rate. Read side only ever loads the
+// write index; determinism of the emulation is unaffected.
+void EmuEngine::MonitorCallback::audioDeviceIOCallbackWithContext(
+    const float* const*, int, float* const* out, int numOut, int numSamples,
+    const juce::AudioIODeviceCallbackContext&) {
+  for (int ch = 0; ch < numOut; ++ch)
+    juce::FloatVectorOperations::clear(out[ch], numSamples);
+
+  const uint64_t w = engine.monWrite_.load(std::memory_order_acquire);
+  const double emuRate = 1.0 / engine.scopeDt_.load(std::memory_order_relaxed);
+  const double step = emuRate / juce::jmax(1.0, deviceRate);
+  const float vol = engine.monitorVolume_.load(std::memory_order_relaxed);
+  const uint64_t target = 4096;  // preferred latency in emu-quantum samples
+
+  if (!primed) {
+    if (w < target) return;  // wait until the ring has some audio
+    readPos = w - target;
+    readFrac = 0.0;
+    primed = true;
+  }
+  // drift guard: if we fell too far behind (or ahead), snap back to target
+  if (w > readPos + (uint64_t)kMonSize || w < readPos ||
+      w > readPos + target * 4)
+    readPos = (w > target) ? w - target : 0;
+
+  for (int s = 0; s < numSamples; ++s) {
+    float v = 0.0f;
+    if (readPos < w) {
+      v = engine.monBuf_[(size_t)(readPos & kMonMask)] * vol;
+      readFrac += step;
+      const auto whole = (uint64_t)readFrac;
+      if (whole > 0) {
+        readPos = juce::jmin(w, readPos + whole);
+        readFrac -= (double)whole;
+      }
+    }
+    for (int ch = 0; ch < numOut; ++ch) out[ch][s] = v;
+  }
 }
 
 void EmuEngine::postTrigFire(int genRow) {
@@ -139,7 +223,8 @@ int EmuEngine::readScope(float* dest, int maxN, double& dtSeconds) const {
 }
 
 // Runs on the emu thread only. One generation quantum of `dt` seconds.
-void EmuEngine::applyGenerators(const TestBenchConfig& b, double dt) {
+void EmuEngine::applyGenerators(const TestBenchConfig& b, const WavData* wav,
+                                double dt) {
   for (int i = 0; i < 8; ++i) {
     const auto& g = b.cv[(size_t)i];
     if (!g.enabled || g.dest < 0 || g.dest > 7) continue;
@@ -206,6 +291,41 @@ void EmuEngine::applyGenerators(const TestBenchConfig& b, double dt) {
       }
     }
   }
+
+  // ---- wav player: file samples -> CV-in jack, resampled at the quantum ----
+  if (wav != nullptr && !wav->mono.empty() && wav->sampleRate > 0.0 &&
+      b.wav.dest >= 0 && b.wav.dest < 8) {
+    const double n = (double)wav->mono.size();
+    const double sk = wavSeek_.exchange(-1.0, std::memory_order_relaxed);
+    if (sk >= 0.0) wavPos_ = juce::jlimit(0.0, n, sk * wav->sampleRate);
+
+    if (b.wav.playing && (wavPos_ < n || b.wav.loop)) {
+      if (wavPos_ >= n) wavPos_ = std::fmod(wavPos_, n);
+      const auto i0 = (size_t)wavPos_;
+      const float frac = (float)(wavPos_ - (double)i0);
+      const float s0 = wav->mono[i0];
+      const float s1 = wav->mono[i0 + 1 < wav->mono.size()
+                                     ? i0 + 1
+                                     : (b.wav.loop ? 0 : i0)];
+      const float samp = s0 + (s1 - s0) * frac;  // linear interpolation
+      const float v = samp * b.wav.peakVolts;
+      emu::set_cv_in(b.wav.dest, v);
+      cvInNow_[(size_t)b.wav.dest] = v;
+      cvInMeter_[(size_t)b.wav.dest].store(v, std::memory_order_relaxed);
+
+      // feed the monitor ring with exactly what the module hears
+      // (normalised back to +-1 by the peak level)
+      if (monitorEnabled_.load(std::memory_order_relaxed)) {
+        const uint64_t mw = monWrite_.load(std::memory_order_relaxed);
+        monBuf_[(size_t)(mw & kMonMask)] = samp;
+        monWrite_.store(mw + 1, std::memory_order_release);
+      }
+
+      wavPos_ += wav->sampleRate * dt;
+      if (wavPos_ >= n && b.wav.loop) wavPos_ = std::fmod(wavPos_, n);
+    }
+    wavPosShared_.store(wavPos_ / wav->sampleRate, std::memory_order_relaxed);
+  }
 }
 
 void EmuEngine::captureScope() {
@@ -265,14 +385,16 @@ void EmuEngine::publishScreen() {
 void EmuEngine::fallbackTick() {
   if (!booted_) return;
   TestBenchConfig b;
+  std::shared_ptr<const WavData> wd;
   {
     juce::SpinLock::ScopedLockType l(benchLock_);
     b = bench_;
+    wd = wavData_;
   }
   drainControlEvents();
   scopeDt_.store(62.5e-6, std::memory_order_relaxed);
   for (int k = 0; k < 16; ++k) {
-    applyGenerators(b, 62.5e-6);
+    applyGenerators(b, wd.get(), 62.5e-6);
     emu::step_us((k & 1) ? 63 : 62);  // 8*62 + 8*63 = 1000 us
     captureScope();
   }
@@ -311,9 +433,11 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
     r = routing_;
   }
   TestBenchConfig b;
+  std::shared_ptr<const WavData> wd;
   {
     juce::SpinLock::ScopedLockType l(benchLock_);
     b = bench_;
+    wd = wavData_;
   }
   const uint32_t genCv = genCvMask_.load(std::memory_order_relaxed);
   const uint32_t genTrig = genTrigMask_.load(std::memory_order_relaxed);
@@ -350,8 +474,8 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
       }
     }
 
-    // ---- internal test-bench generators ----
-    applyGenerators(b, dtSample);
+    // ---- internal test-bench generators + wav player ----
+    applyGenerators(b, wd.get(), dtSample);
 
     // ---- advance firmware time by one sample ----
     usAccum_ += usPerSample_;

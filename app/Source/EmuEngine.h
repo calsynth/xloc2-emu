@@ -27,6 +27,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 // Jack identifiers for routing.
@@ -79,11 +80,29 @@ struct TrigGenConfig {
   float pulseMs = 10.0f;  // 1 .. 100
 };
 
+// WAV player: a decoded audio file fed to a CV-in jack at the emulation
+// quantum, exactly like an external signal would arrive.
+struct WavPlayerConfig {
+  juce::String path;       // last loaded file (persisted; re-decoded at boot)
+  int dest = -1;           // 0..7 = CV In 1..8, -1 = none
+  float peakVolts = 5.0f;  // full-scale sample (+-1.0) maps to +- this
+  bool loop = false;
+  bool playing = false;    // transport state (persisted)
+};
+
+// Fully decoded, mono-mixed audio file (message thread creates, emu thread
+// reads via a shared_ptr swapped under the bench lock).
+struct WavData {
+  std::vector<float> mono;      // -1..1
+  double sampleRate = 44100.0;  // file rate; resampled at the quantum
+};
+
 // Scope source indexing: 0..7 = CV In 1..8, 8..15 = CV Out A..H,
 // 16..19 = TR 1..4.
 struct TestBenchConfig {
   std::array<CvGenConfig, 8> cv;
   std::array<TrigGenConfig, 4> trig;
+  WavPlayerConfig wav;
   // Scope settings ride along so they persist with the generators; the
   // engine only uses scopeSource, the rest is UI state.
   int scopeSource = 8;    // CV Out A
@@ -142,6 +161,29 @@ class EmuEngine : public juce::AudioIODeviceCallback {
   // period in seconds (device sample period, or 62.5 us in fallback mode).
   int readScope(float* dest, int maxN, double& dtSeconds) const;
 
+  // ---- wav player (message thread) ----
+  void setWavData(std::shared_ptr<const WavData> data);  // nullptr = unload
+  void wavSeekSeconds(double seconds);
+  double wavPositionSeconds() const {
+    return wavPosShared_.load(std::memory_order_relaxed);
+  }
+  double wavLengthSeconds() const {
+    return wavLen_.load(std::memory_order_relaxed);
+  }
+
+  // ---- monitor output (hear what the module hears, computer speakers) ----
+  // A second, output-only device fed from a lock-free ring the emulation
+  // thread fills; never affects emulation determinism.
+  juce::AudioDeviceManager& monitorDeviceManager() { return monitorManager_; }
+  void setMonitorEnabled(bool on);
+  bool monitorEnabled() const {
+    return monitorEnabled_.load(std::memory_order_relaxed);
+  }
+  bool monitorAvailable() const;  // true when an output device is open
+  void setMonitorVolume(float v) {
+    monitorVolume_.store(v, std::memory_order_relaxed);
+  }
+
   // ---- screen snapshot for UI (message thread) ----
   // Copies latest completed 1024-byte page buffer; returns frame counter.
   uint64_t readScreen(uint8_t* dest1024) const;
@@ -184,12 +226,27 @@ class EmuEngine : public juce::AudioIODeviceCallback {
     EmuEngine& engine;
   };
 
+  struct MonitorCallback : juce::AudioIODeviceCallback {
+    explicit MonitorCallback(EmuEngine& e) : engine(e) {}
+    void audioDeviceIOCallbackWithContext(
+        const float* const*, int, float* const* out, int numOut,
+        int numSamples, const juce::AudioIODeviceCallbackContext&) override;
+    void audioDeviceAboutToStart(juce::AudioIODevice* d) override;
+    void audioDeviceStopped() override {}
+    EmuEngine& engine;
+    double deviceRate = 48000.0;
+    uint64_t readPos = 0;     // monitor-thread-owned ring read index
+    double readFrac = 0.0;
+    bool primed = false;
+  };
+
   void drainControlEvents();
   void publishScreen();
   void fallbackTick();
-  // One generation quantum: evaluate enabled generators and push their
-  // values into the emu (overriding routed inputs). Runs on the emu thread.
-  void applyGenerators(const TestBenchConfig& b, double dt);
+  // One generation quantum: evaluate enabled generators + wav player and
+  // push their values into the emu (overriding routed inputs). Runs on the
+  // emu thread.
+  void applyGenerators(const TestBenchConfig& b, const WavData* wav, double dt);
   void captureScope();  // append current source value to the ring
 
   juce::AudioDeviceManager deviceManager_;
@@ -214,6 +271,22 @@ class EmuEngine : public juce::AudioIODeviceCallback {
   std::atomic<uint64_t> scopeWrite_{0};
   std::atomic<int> scopeSource_{8};
   std::atomic<double> scopeDt_{1.0 / 16000.0};
+
+  // wav player state (emu thread) + UI-visible atomics
+  std::shared_ptr<const WavData> wavData_;  // guarded by benchLock_
+  double wavPos_ = 0.0;                     // in file samples
+  std::atomic<double> wavSeek_{-1.0};       // pending seek in seconds, <0 none
+  std::atomic<double> wavPosShared_{0.0}, wavLen_{0.0};
+
+  // monitor: SPSC ring, emu thread writes, monitor device reads
+  static constexpr int kMonSize = 1 << 15;
+  static constexpr uint64_t kMonMask = kMonSize - 1;
+  std::vector<float> monBuf_ = std::vector<float>((size_t)kMonSize, 0.0f);
+  std::atomic<uint64_t> monWrite_{0};
+  juce::AudioDeviceManager monitorManager_;
+  MonitorCallback monitorCb_{*this};
+  std::atomic<bool> monitorEnabled_{false};
+  std::atomic<float> monitorVolume_{0.7f};
 
   double usPerSample_ = 1e6 / 48000.0;
   double usAccum_ = 0.0;

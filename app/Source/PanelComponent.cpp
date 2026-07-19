@@ -307,6 +307,10 @@ class PanelComponent::Jack : public juce::Component,
 // ---------------------------------------------------------------------------
 PanelComponent::PanelComponent(EmuEngine& engine)
     : engine_(engine), oled_(engine), routing_(engine), bench_(engine) {
+  // Vector panel art (text outlined as paths -> crisp at any scale); the
+  // PNG stays as a fallback if the SVG fails to parse.
+  panelSvg_ = juce::Drawable::createFromImageData(BinaryData::panel_svg,
+                                                  BinaryData::panel_svgSize);
   panelArt_ = juce::ImageCache::getFromMemory(BinaryData::panel_png,
                                               BinaryData::panel_pngSize);
 
@@ -377,7 +381,7 @@ PanelComponent::PanelComponent(EmuEngine& engine)
             {juce::KeyPress::escapeKey, 0, emu::ENC_L_PUSH, false}}};
 
   setWantsKeyboardFocus(true);
-  setSize(1080, 1000);
+  setSize(1140, 1000);
   startTimerHz(30);
 }
 
@@ -411,7 +415,7 @@ void PanelComponent::openRouting(JackId focus) {
 int PanelComponent::benchWidth() const {
   if (!benchVisible_) return 0;
   // fixed ~400 px, but never squeeze the panel below usability
-  return juce::jmin(400, juce::jmax(280, getWidth() - 420));
+  return juce::jmin(460, juce::jmax(300, getWidth() - 420));
 }
 
 juce::Rectangle<float> PanelComponent::panelBounds() const {
@@ -446,12 +450,26 @@ void PanelComponent::resized() {
   const auto& L = layout_;
   const float s = pb.getWidth() / PanelLayout::widthMm;
 
-  // cache the artwork scaled to the current panel rect
+  // cache the artwork rendered at the current panel rect's exact pixel size
   const int pw = juce::roundToInt(pb.getWidth());
   const int ph = juce::roundToInt(pb.getHeight());
-  if (panelArt_.isValid() && pw > 0 && ph > 0 &&
-      (panelScaled_.getWidth() != pw || panelScaled_.getHeight() != ph))
-    panelScaled_ = panelArt_.rescaled(pw, ph, juce::Graphics::highResamplingQuality);
+  if (pw > 0 && ph > 0 &&
+      (panelScaled_.getWidth() != pw || panelScaled_.getHeight() != ph)) {
+    if (panelSvg_ != nullptr) {
+      // rasterize the vector art at target size (the SVG has no background
+      // rect, so paint the aluminum white first)
+      juce::Image img(juce::Image::ARGB, pw, ph, true);
+      juce::Graphics gi(img);
+      gi.fillAll(juce::Colours::white);
+      panelSvg_->drawWithin(gi,
+                            juce::Rectangle<float>(0, 0, (float)pw, (float)ph),
+                            juce::RectanglePlacement::stretchToFit, 1.0f);
+      panelScaled_ = img;
+    } else if (panelArt_.isValid()) {
+      panelScaled_ =
+          panelArt_.rescaled(pw, ph, juce::Graphics::highResamplingQuality);
+    }
+  }
 
   oled_.setBounds(juce::Rectangle<float>(pb.getX() + L.oled.getX() * s,
                                          pb.getY() + L.oled.getY() * s,

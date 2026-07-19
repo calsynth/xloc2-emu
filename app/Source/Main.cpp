@@ -49,7 +49,7 @@ class XLOC2Application : public juce::JUCEApplication {
       setContentOwned(new PanelComponent(engine), true);
       setResizable(true, true);
       setResizeLimits(480, 630, 4096, 4096);
-      centreWithSize(1080, 1000);
+      centreWithSize(1140, 1000);
       setVisible(true);
     }
 

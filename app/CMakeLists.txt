@@ -9,7 +9,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(JUCE)
 
 # Embedded assets (real front-panel artwork from Calsynth)
-juce_add_binary_data(xloc2_assets SOURCES Assets/panel.png)
+# panel.svg = vector outlines (crisp at any scale); panel.png kept as fallback
+juce_add_binary_data(xloc2_assets SOURCES Assets/panel.svg Assets/panel.png)
 
 juce_add_gui_app(xloc2
   VERSION 0.1.0
