@@ -118,7 +118,7 @@ class RoutingPanel::Row : public juce::Component, private juce::Timer {
     JackRouting j;
     j.deviceChannel = channel_.getSelectedId() - 2;  // id 1 == "(none)" == -1
     j.gain = gain_.getText().getFloatValue();
-    if (j.gain == 0.0f) j.gain = 1.0f;
+    if (std::abs(j.gain) < 1.0e-6f) j.gain = 1.0f;  // empty/zero field -> unity
     j.offsetVolts = offset_.getText().getFloatValue();
     return j;
   }

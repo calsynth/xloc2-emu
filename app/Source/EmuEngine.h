@@ -91,9 +91,9 @@ class EmuEngine : public juce::AudioIODeviceCallback {
   uint64_t readScreen(uint8_t* dest1024) const;
 
   // Live jack values for UI meters (volts), updated ~per block.
-  float cvOutVolts(int ch) const { return cvOutMeter_[ch].load(std::memory_order_relaxed); }
-  float cvInVolts(int ch) const { return cvInMeter_[ch].load(std::memory_order_relaxed); }
-  bool trigInHigh(int ch) const { return trigDisp_[ch].load(std::memory_order_relaxed); }
+  float cvOutVolts(int ch) const { return cvOutMeter_[(size_t)ch].load(std::memory_order_relaxed); }
+  float cvInVolts(int ch) const { return cvInMeter_[(size_t)ch].load(std::memory_order_relaxed); }
+  bool trigInHigh(int ch) const { return trigDisp_[(size_t)ch].load(std::memory_order_relaxed); }
 
   // AudioIODeviceCallback
   void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
