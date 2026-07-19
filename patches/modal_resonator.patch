@@ -1,0 +1,26 @@
+diff --git a/software/src/Audio/AudioEffectModalResonator.h b/software/src/Audio/AudioEffectModalResonator.h
+index ea92bb4..18a3ad6 100644
+--- a/software/src/Audio/AudioEffectModalResonator.h
++++ b/software/src/Audio/AudioEffectModalResonator.h
+@@ -184,9 +184,11 @@ public:
+         }
+ 
+         // Enable FPU flush-to-zero + default-NaN
++#if defined(__arm__)
+         uint32_t fpscr_save;
+         __asm__ volatile("vmrs %0, fpscr" : "=r"(fpscr_save));
+         __asm__ volatile("vmsr fpscr, %0" :: "r"(fpscr_save | 0x03000000u));
++#endif
+ 
+         const int16_t* src = in ? in->data : nullptr;
+         int16_t*       dst = out->data;
+@@ -276,7 +278,9 @@ public:
+             bp_[k] = bp[k];
+         }
+ 
++#if defined(__arm__)
+         __asm__ volatile("vmsr fpscr, %0" :: "r"(fpscr_save));
++#endif
+ 
+         transmit(out, 0);
+         release(out);

@@ -1,0 +1,19 @@
+diff --git a/software/src/src/drivers/weegfx.cpp b/software/src/src/drivers/weegfx.cpp
+index 956a118..17c2dbd 100644
+--- a/software/src/src/drivers/weegfx.cpp
++++ b/software/src/src/drivers/weegfx.cpp
+@@ -529,10 +529,12 @@ void Graphics::print(uint16_t value, unsigned width)
+   print(str);
+ }
+ 
+-void Graphics::print(uint32_t value, size_t width)
++// (emulator) declared as `unsigned width` in weegfx.h; size_t only matched on
++// 32-bit ARM where size_t == unsigned int.
++void Graphics::print(uint32_t value, unsigned width)
+ {
+   char *str = itos<uint32_t, false>(value, print_buf, sizeof(print_buf));
+-  while (str > print_buf && (size_t)(str - print_buf) >= sizeof(print_buf) - width) *--str = ' ';
++  while (str > print_buf && (unsigned)(str - print_buf) >= sizeof(print_buf) - width) *--str = ' ';
+   print(str);
+ }
+ 

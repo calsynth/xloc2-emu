@@ -1,0 +1,13 @@
+diff --git a/software/src/src/Audio/filter_variable2.cpp b/software/src/src/Audio/filter_variable2.cpp
+index 310f494..ced11ab 100644
+--- a/software/src/src/Audio/filter_variable2.cpp
++++ b/software/src/src/Audio/filter_variable2.cpp
+@@ -272,7 +272,7 @@ void AudioFilterStateVariable2::update(void)
+ 	return;
+ }
+ 
+-#elif defined(KINETISL)
++#else // KINETISL or host build (XLOC2 emulator)
+ 
+ void AudioFilterStateVariable2::update(void)
+ {

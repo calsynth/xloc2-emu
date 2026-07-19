@@ -1,5 +1,13 @@
 # Firmware patches (host/emulator build)
 
+> The five edits below are also maintained as git-apply-compatible patch
+> files in `patches/` (one per file, paths relative to the firmware source
+> root). `scripts/build-core.sh --repo <url> --ref <ref>` shallow-clones any
+> Phazerville version, applies them with `git apply --3way`, and builds a
+> loadable core module (`phz_core-<ref>.so/.dylib`) the app can hot-load
+> from its FW panel — no app rebuild needed. The vendored `firmware/` tree
+> (upstream v2.0.1 + these edits) remains the default build source.
+
 The goal is to run the *unmodified* Phazerville firmware; everything possible
 is handled in `shim/` and `core/`. The following minimal edits to files under
 `firmware/` were unavoidable because they contain ARM inline assembly or

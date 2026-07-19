@@ -1,3 +1,4 @@
 build/
 state/
 *.pbm
+build-core/

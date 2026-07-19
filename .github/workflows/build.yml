@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      core_repo:
+        description: "Phazerville repo URL to build a core from (empty = skip)"
+        required: false
+        default: ""
+      core_ref:
+        description: "Branch / tag / commit to build"
+        required: false
+        default: ""
 
 jobs:
   test-linux:
@@ -15,9 +24,9 @@ jobs:
         with: { submodules: recursive }
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DXLOC2_BUILD_APP=OFF
-      - name: Build
+      - name: Build (core module + headless)
         run: cmake --build build -j4 --target headless
-      - name: Run headless tests
+      - name: Run headless tests (dlopen path)
         run: ./build/headless
 
   build-macos:
@@ -31,8 +40,10 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_OSX_ARCHITECTURES=arm64
           -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
-      - name: Build
+      - name: Build (app + bundled phz_core.dylib)
         run: cmake --build build -j4 --target xloc2
+      - name: Verify the core is bundled
+        run: test -f build/app/xloc2_artefacts/Release/XLOC2.app/Contents/Resources/phz_core.dylib
       - name: Package
         run: |
           mkdir -p dist
@@ -42,3 +53,25 @@ jobs:
         with:
           name: XLOC2-macOS-arm64
           path: dist/XLOC2-macOS-arm64.zip
+
+  # On-demand: build a loadable core module from any Phazerville repo/ref
+  # (official release, fork, branch) for macOS arm64. Drop the artifact into
+  # the app's cores folder and load it from the FW panel.
+  build-core:
+    name: Core module from repo/ref (macOS arm64)
+    runs-on: macos-14
+    if: github.event_name == 'workflow_dispatch' && inputs.core_repo != ''
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Build core
+        run: >
+          ./scripts/build-core.sh
+          --repo "${{ inputs.core_repo }}"
+          --ref "${{ inputs.core_ref }}"
+          --out dist-core
+          -- -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phz_core-${{ inputs.core_ref }}-macos-arm64
+          path: dist-core/*.dylib

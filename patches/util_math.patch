@@ -1,0 +1,49 @@
+diff --git a/software/src/util/util_math.h b/software/src/util/util_math.h
+index 474cff6..39dbab6 100644
+--- a/software/src/util/util_math.h
++++ b/software/src/util/util_math.h
+@@ -72,6 +72,7 @@ constexpr int Atten(int8_t att) {
+ #define MOD_8(n, div) \
+   FAST_FP_MOD(n, div, 8)
+ 
++#if defined(__arm__)
+ inline int32_t SSAT16(int32_t value) __attribute__((always_inline));
+ inline int32_t SSAT16(int32_t value) {
+   int32_t result;
+@@ -117,6 +118,36 @@ static inline uint32_t uhadd16(uint32_t a, uint32_t b)
+   asm volatile("uhadd16 %0, %1, %2" : "=r" (out) : "r" (a), "r" (b));
+   return out;
+ }
++#else  // !__arm__ : generic host implementations (XLOC2 emulator)
++inline int32_t SSAT16(int32_t value) {
++  if (value > 32767) return 32767;
++  if (value < -32768) return -32768;
++  return value;
++}
++
++inline uint32_t USAT16(uint32_t value) {
++  return value > 65535u ? 65535u : value;
++}
++
++inline uint32_t USAT16(int32_t value) {
++  if (value < 0) return 0;
++  return value > 65535 ? 65535u : (uint32_t)value;
++}
++
++static inline uint32_t multiply_u32xu32_rshift24(uint32_t a, uint32_t b) {
++  return (uint32_t)(((uint64_t)a * (uint64_t)b) >> 24);
++}
++
++static inline uint32_t multiply_u32xu32_rshift(uint32_t a, uint32_t b, uint32_t shift) {
++  return (uint32_t)(((uint64_t)a * (uint64_t)b) >> shift);
++}
++
++static inline uint32_t uhadd16(uint32_t a, uint32_t b) {
++  uint32_t lo = (((a & 0xffffu) + (b & 0xffffu)) >> 1) & 0xffffu;
++  uint32_t hi = (((a >> 16) + (b >> 16)) >> 1) & 0xffffu;
++  return lo | (hi << 16);
++}
++#endif  // __arm__
+ 
+ template <typename T, T smoothing>
+ struct SmoothedValue {
