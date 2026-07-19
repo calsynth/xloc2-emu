@@ -24,6 +24,8 @@ juce_add_gui_app(xloc2
 target_sources(xloc2 PRIVATE
   Source/Main.cpp
   Source/EmuEngine.cpp
+  Source/CoreLoader.cpp
+  Source/CorePanel.cpp
   Source/PanelComponent.cpp
   Source/OledComponent.cpp
   Source/RoutingPanel.cpp
@@ -38,7 +40,6 @@ target_compile_definitions(xloc2 PRIVATE
 )
 
 target_link_libraries(xloc2 PRIVATE
-  firmware_core
   xloc2_assets
   juce::juce_gui_extra
   juce::juce_audio_devices
@@ -46,3 +47,18 @@ target_link_libraries(xloc2 PRIVATE
   juce::juce_recommended_config_flags
   juce::juce_recommended_warning_flags
 )
+
+# The app does NOT link the firmware — it dlopens the phz_core module at
+# runtime. Bundle the default core with the app so it runs out of the box:
+# macOS: XLOC2.app/Contents/Resources/phz_core.dylib; else next to the binary.
+add_dependencies(xloc2 phz_core)
+if(APPLE)
+  add_custom_command(TARGET xloc2 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:phz_core>
+      $<TARGET_BUNDLE_CONTENT_DIR:xloc2>/Resources/phz_core.dylib)
+else()
+  add_custom_command(TARGET xloc2 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:phz_core> $<TARGET_FILE_DIR:xloc2>)
+endif()

@@ -27,8 +27,11 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
+
+#include "CoreLoader.h"
 
 // Jack identifiers for routing.
 enum class JackId : int {
@@ -116,10 +119,35 @@ class EmuEngine : public juce::AudioIODeviceCallback {
   EmuEngine();
   ~EmuEngine() override;
 
-  // Boots firmware (state dir under userApplicationDataDirectory) and opens
-  // audio; `savedAudioState` (from AudioDeviceManager::createStateXml) restores
-  // the previous device selection. Safe to call once at startup from the
-  // message thread. If no device opens, the 1 kHz fallback clock takes over.
+  // ---- firmware core (dynamically loaded module) ----
+  // The firmware lives in a dlopen'd core module (phz_core.so/.dylib); the
+  // engine drives it exclusively through its C API. All core management runs
+  // on the message thread and suspends the emulation clocks around the swap,
+  // so the audio/fallback threads never see a half-loaded core.
+  //
+  // Hot reload semantics: eeprom_flush -> unload -> load new -> boot. The
+  // firmware state survives via the state dir on disk (a reload is a clean
+  // reboot of the module, like power-cycling the hardware).
+  // Returns false and leaves the engine core-less on failure (`error` says
+  // why, e.g. an api_version mismatch).
+  bool loadCore(const juce::File& coreFile, juce::String& error);
+  bool reloadCore(juce::String& error);  // reload the currently loaded file
+  bool coreLoaded() const { return api_ != nullptr; }
+  juce::File coreFile() const { return core_.loadedFile(); }
+  juce::String coreVersion() const;    // fw_version of the loaded core
+  juce::String coreBuildInfo() const;  // build_info of the loaded core
+  // Auto-reload: watch the loaded file's mtime (1 s timer) and reload when
+  // it changes (debounced until the file stops changing).
+  void setAutoReload(bool on);
+  bool autoReload() const { return autoReload_; }
+  // Called on the message thread after every load attempt (manual or auto):
+  // (success, error message when failed).
+  std::function<void(bool, const juce::String&)> onCoreChanged;
+
+  // Opens audio and starts driving the loaded core; `savedAudioState` (from
+  // AudioDeviceManager::createStateXml) restores the previous device
+  // selection. Call once at startup from the message thread, after
+  // loadCore(). If no device opens, the 1 kHz fallback clock takes over.
   void start(const juce::XmlElement* savedAudioState = nullptr);
   void stop();
 
@@ -240,6 +268,18 @@ class EmuEngine : public juce::AudioIODeviceCallback {
     bool primed = false;
   };
 
+  struct CoreWatcher : juce::Timer {
+    explicit CoreWatcher(EmuEngine& e) : engine(e) {}
+    void timerCallback() override { engine.autoReloadPoll(); }
+    EmuEngine& engine;
+  };
+
+  // Stop/restart the emulation clocks (audio callback + fallback timer)
+  // around a core swap. Both block until any in-flight tick has finished.
+  void suspendClocks();
+  void resumeClocks();
+  void autoReloadPoll();
+
   void drainControlEvents();
   void publishScreen();
   void fallbackTick();
@@ -290,7 +330,16 @@ class EmuEngine : public juce::AudioIODeviceCallback {
 
   double usPerSample_ = 1e6 / 48000.0;
   double usAccum_ = 0.0;
-  bool booted_ = false;
+  bool booted_ = false;   // core loaded AND boot() has run
+  bool started_ = false;  // start() has run (audio/fallback clocks active)
+
+  // dynamically loaded firmware core; api_ is only swapped on the message
+  // thread while the clocks are suspended, so emu-thread access is safe.
+  CoreLoader core_;
+  const Xloc2CoreApi* api_ = nullptr;
+  CoreWatcher coreWatcher_{*this};
+  bool autoReload_ = false;
+  juce::Time watchedTime_;  // last mtime seen by the watcher (debounce)
 
   FallbackClock fallback_{*this};
   std::atomic<bool> audioActive_{false};

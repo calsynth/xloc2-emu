@@ -25,8 +25,30 @@ class XLOC2Application : public juce::JUCEApplication {
     TestBenchConfig bench;
     if (xloc2::loadTestBench(bench)) engine_->setTestBench(bench);
 
+    // Load the firmware core module: <stateDir>/cores/active (symlink or
+    // active.txt) first, then the core bundled with the app. On failure the
+    // app still opens — the FW panel can load a core manually.
+    juce::String coreError;
+    const auto coreFile = CoreLoader::findDefaultCore();
+    if (coreFile == juce::File())
+      coreError = "No firmware core found.\nPut one in " +
+                  CoreLoader::coresDir().getFullPathName() +
+                  " or reinstall the app.";
+    else
+      engine_->loadCore(coreFile, coreError);
+
     engine_->start(savedAudioState.get());
     mainWindow_ = std::make_unique<MainWindow>(getApplicationName(), *engine_);
+
+    if (!engine_->coreLoaded())
+      juce::AlertWindow::showMessageBoxAsync(
+          juce::MessageBoxIconType::WarningIcon, "Firmware core", coreError);
+
+    // Developer convenience: XLOC2_AUTO_RELOAD=1 starts with auto-reload on,
+    // so `cmake --build build --target phz_core` hot-swaps the running app.
+    if (juce::SystemStats::getEnvironmentVariable("XLOC2_AUTO_RELOAD", "0") ==
+        "1")
+      engine_->setAutoReload(true);
   }
 
   void shutdown() override {

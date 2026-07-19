@@ -1,7 +1,7 @@
 #include "PanelComponent.h"
 
 #include "BinaryData.h"
-#include "../../core/emu.h"
+#include "../../core/xloc2_core_api.h"
 
 namespace {
 constexpr uint32_t kWindowBg = 0xff17181b;  // letterbox / status margin
@@ -152,7 +152,7 @@ class PanelComponent::Encoder : public juce::Component, private juce::Timer {
     if (pushed_ == down) return;
     pushed_ = down;
     pressed_ = down;  // accent ring reflects what the firmware sees
-    engine_.postButton(right_ ? emu::ENC_R_PUSH : emu::ENC_L_PUSH, down);
+    engine_.postButton(right_ ? XLOC2_BTN_ENC_R : XLOC2_BTN_ENC_L, down);
     repaint();
   }
 
@@ -365,7 +365,8 @@ class PanelComponent::Jack : public juce::Component,
 // PanelComponent
 // ---------------------------------------------------------------------------
 PanelComponent::PanelComponent(EmuEngine& engine)
-    : engine_(engine), oled_(engine), routing_(engine), bench_(engine) {
+    : engine_(engine), oled_(engine), routing_(engine), bench_(engine),
+      corePanel_(engine) {
   // Vector panel art (text outlined as paths -> crisp at any scale); the
   // PNG stays as a fallback if the SVG fails to parse.
   panelSvg_ = juce::Drawable::createFromImageData(BinaryData::panel_svg,
@@ -380,8 +381,8 @@ PanelComponent::PanelComponent(EmuEngine& engine)
   addAndMakeVisible(*encR_);
 
   // order matches resized(): A, B, X, Y, Z
-  for (int b : {emu::BUTTON_A, emu::BUTTON_B, emu::BUTTON_X, emu::BUTTON_Y,
-                emu::BUTTON_Z})
+  for (int b : {XLOC2_BTN_A, XLOC2_BTN_B, XLOC2_BTN_X, XLOC2_BTN_Y,
+                XLOC2_BTN_Z})
     addAndMakeVisible(buttons_.add(new PanelButton(engine_, b)));
 
   auto onJack = [this](JackId id) { openRouting(id); };
@@ -415,6 +416,26 @@ PanelComponent::PanelComponent(EmuEngine& engine)
   ioButton_.onClick = [this] { openRouting(JackId::None); };
   addAndMakeVisible(ioButton_);
 
+  corePanel_.setVisible(false);
+  corePanel_.onClose = [this] {
+    corePanel_.setVisible(false);
+    grabKeyboardFocus();
+  };
+  addChildComponent(corePanel_);
+
+  fwButton_.setTooltip("Firmware core: version, load, hot reload");
+  fwButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a2d33));
+  fwButton_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3a3f48));
+  fwButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffc9ced8));
+  fwButton_.onClick = [this] { openCorePanel(); };
+  addAndMakeVisible(fwButton_);
+
+  // repaint the status strip + refresh the FW panel after any core (re)load
+  engine_.onCoreChanged = [this](bool, const juce::String&) {
+    corePanel_.refresh();
+    repaint();
+  };
+
   addAndMakeVisible(bench_);
   benchButton_.setTooltip("Show/hide the test bench (scope + generators)");
   benchButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a2d33));
@@ -431,13 +452,13 @@ PanelComponent::PanelComponent(EmuEngine& engine)
   };
   addAndMakeVisible(benchButton_);
 
-  keys_ = {{{'A', 'a', emu::BUTTON_A, false},
-            {'B', 'b', emu::BUTTON_B, false},
-            {'X', 'x', emu::BUTTON_X, false},
-            {'Y', 'y', emu::BUTTON_Y, false},
-            {'Z', 'z', emu::BUTTON_Z, false},
-            {juce::KeyPress::returnKey, 0, emu::ENC_R_PUSH, false},
-            {juce::KeyPress::escapeKey, 0, emu::ENC_L_PUSH, false}}};
+  keys_ = {{{'A', 'a', XLOC2_BTN_A, false},
+            {'B', 'b', XLOC2_BTN_B, false},
+            {'X', 'x', XLOC2_BTN_X, false},
+            {'Y', 'y', XLOC2_BTN_Y, false},
+            {'Z', 'z', XLOC2_BTN_Z, false},
+            {juce::KeyPress::returnKey, 0, XLOC2_BTN_ENC_R, false},
+            {juce::KeyPress::escapeKey, 0, XLOC2_BTN_ENC_L, false}}};
 
   setWantsKeyboardFocus(true);
   setSize(naturalWidth(), naturalHeight());
@@ -466,9 +487,16 @@ void PanelComponent::timerCallback() {
 }
 
 void PanelComponent::openRouting(JackId focus) {
+  corePanel_.setVisible(false);
   routing_.setVisible(true);
   routing_.toFront(false);
   if (focus != JackId::None) routing_.focusJack(focus);
+}
+
+void PanelComponent::openCorePanel() {
+  routing_.setVisible(false);
+  corePanel_.setVisible(true);
+  corePanel_.toFront(false);
 }
 
 // The column height is driven by the sidebar's natural (scroll-free) content
@@ -585,13 +613,15 @@ void PanelComponent::resized() {
 
   const int rw = juce::jmin(440, getWidth() - 30);
   routing_.setBounds(getWidth() - rw, 0, rw, getHeight());
+  corePanel_.setBounds(getWidth() - rw, 0, rw, getHeight());
 
-  // TEST / I/O chips centred in the bottom strip
+  // TEST / I/O / FW chips centred in the bottom strip
   const int chipW = 70, chipH = 26, chipGap = 10;
   const int chipY = getHeight() - kStripH + (kStripH - chipH) / 2;
-  const int chipX = (getWidth() - (2 * chipW + chipGap)) / 2;
+  const int chipX = (getWidth() - (3 * chipW + 2 * chipGap)) / 2;
   benchButton_.setBounds(chipX, chipY, chipW, chipH);
   ioButton_.setBounds(chipX + chipW + chipGap, chipY, chipW, chipH);
+  fwButton_.setBounds(chipX + 2 * (chipW + chipGap), chipY, chipW, chipH);
 }
 
 void PanelComponent::paint(juce::Graphics& g) {
@@ -621,6 +651,18 @@ void PanelComponent::paint(juce::Graphics& g) {
     g.drawText("no audio device - internal 1 kHz clock", 12,
                getHeight() - kStripH, juce::jmax(60, getWidth() / 2 - 100),
                kStripH, juce::Justification::centredLeft);
+  }
+
+  // loaded firmware core in the right corner of the bottom strip
+  {
+    g.setColour(juce::Colour(0xff8a93a1));
+    g.setFont(juce::Font(juce::FontOptions(12.0f)));
+    const auto info = engine_.coreLoaded()
+                          ? "core " + engine_.coreVersion() + "  |  " +
+                                engine_.coreBuildInfo()
+                          : juce::String("no firmware core loaded");
+    g.drawText(info, getWidth() / 2 + 130, getHeight() - kStripH,
+               getWidth() / 2 - 142, kStripH, juce::Justification::centredRight);
   }
 }
 

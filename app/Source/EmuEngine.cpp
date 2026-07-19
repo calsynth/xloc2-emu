@@ -3,8 +3,6 @@
 #include <juce_core/juce_core.h>
 #include <cmath>
 
-#include "../../core/emu.h"
-
 namespace {
 // Deterministic self-contained PRNG (xorshift32), one state per generator.
 inline uint32_t xorshift32(uint32_t& s) {
@@ -41,11 +39,89 @@ juce::File EmuEngine::stateDir() {
       .getChildFile("Calsynth/XLOC2");
 }
 
+// ---------------------------------------------------------------------------
+// firmware core management (message thread only)
+// ---------------------------------------------------------------------------
+void EmuEngine::suspendClocks() {
+  // stopping_ keeps audioDeviceStopped() from restarting the fallback clock
+  // while the callback is being detached.
+  stopping_.store(true, std::memory_order_relaxed);
+  deviceManager_.removeAudioCallback(this);  // blocks until callback returns
+  fallback_.stopTimer();                     // blocks until tick returns
+  stopping_.store(false, std::memory_order_relaxed);
+}
+
+void EmuEngine::resumeClocks() {
+  if (!started_) return;
+  deviceManager_.addAudioCallback(this);
+  if (deviceManager_.getCurrentAudioDevice() == nullptr)
+    fallback_.startTimer(1);
+}
+
+bool EmuEngine::loadCore(const juce::File& coreFile, juce::String& error) {
+  suspendClocks();
+  if (booted_ && api_ != nullptr) api_->eeprom_flush();
+  booted_ = false;
+  api_ = nullptr;
+  core_.unload();
+
+  bool ok = core_.load(coreFile, error);
+  if (ok) {
+    api_ = core_.api();
+    auto dir = stateDir();
+    dir.createDirectory();
+    api_->boot(dir.getFullPathName().toRawUTF8());
+    booted_ = true;
+    watchedTime_ = core_.loadedFileTime();
+    resumeClocks();
+  }
+  if (onCoreChanged) onCoreChanged(ok, error);
+  return ok;
+}
+
+bool EmuEngine::reloadCore(juce::String& error) {
+  const auto f = core_.loadedFile();
+  if (f == juce::File()) {
+    error = "No core loaded";
+    return false;
+  }
+  return loadCore(f, error);
+}
+
+juce::String EmuEngine::coreVersion() const {
+  return api_ != nullptr ? juce::String::fromUTF8(api_->fw_version) : juce::String();
+}
+
+juce::String EmuEngine::coreBuildInfo() const {
+  return api_ != nullptr ? juce::String::fromUTF8(api_->build_info).trim()
+                         : juce::String();
+}
+
+void EmuEngine::setAutoReload(bool on) {
+  if (on == autoReload_) return;
+  autoReload_ = on;
+  watchedTime_ = core_.loadedFileTime();
+  if (on) coreWatcher_.startTimer(1000);
+  else coreWatcher_.stopTimer();
+}
+
+// 1 s message-thread poll: reload once the file's mtime changed AND has been
+// stable for one poll (so we don't load a half-written file mid-build).
+void EmuEngine::autoReloadPoll() {
+  const auto f = core_.loadedFile();
+  if (!autoReload_ || f == juce::File() || !f.existsAsFile()) return;
+  const auto t = f.getLastModificationTime();
+  if (t == core_.loadedFileTime()) return;  // unchanged since load
+  if (t != watchedTime_) {
+    watchedTime_ = t;  // changed — wait one poll for the write to settle
+    return;
+  }
+  juce::String error;
+  reloadCore(error);
+}
+
 void EmuEngine::start(const juce::XmlElement* savedAudioState) {
-  auto dir = stateDir();
-  dir.createDirectory();
-  emu::boot(dir.getFullPathName().toStdString());
-  booted_ = true;
+  started_ = true;
 
   deviceManager_.initialise(8, 8, savedAudioState, true);
   if (deviceManager_.getCurrentAudioDevice() == nullptr)
@@ -61,11 +137,13 @@ void EmuEngine::start(const juce::XmlElement* savedAudioState) {
 
 void EmuEngine::stop() {
   stopping_.store(true, std::memory_order_relaxed);
+  coreWatcher_.stopTimer();
   setMonitorEnabled(false);
   deviceManager_.removeAudioCallback(this);
   deviceManager_.closeAudioDevice();
   fallback_.stopTimer();
-  if (booted_) emu::eeprom_flush();
+  if (booted_ && api_ != nullptr) api_->eeprom_flush();
+  started_ = false;
   stopping_.store(false, std::memory_order_relaxed);
 }
 
@@ -265,7 +343,7 @@ void EmuEngine::applyGenerators(const TestBenchConfig& b, const WavData* wav,
       }
     }
     const float v = g.minVolts + (x + 1.0f) * 0.5f * (g.maxVolts - g.minVolts);
-    emu::set_cv_in(g.dest, v);
+    api_->set_cv_in(g.dest, v);
     cvInNow_[(size_t)g.dest] = v;
     cvInMeter_[(size_t)g.dest].store(v, std::memory_order_relaxed);
   }
@@ -287,7 +365,7 @@ void EmuEngine::applyGenerators(const TestBenchConfig& b, const WavData* wav,
       if (g.dest >= 0 && g.dest < 4) {
         trigState_[(size_t)g.dest] = high;
         trigDisp_[(size_t)g.dest].store(high, std::memory_order_relaxed);
-        emu::set_trigger_in(g.dest, high);
+        api_->set_trigger_in(g.dest, high ? 1 : 0);
       }
     }
   }
@@ -309,7 +387,7 @@ void EmuEngine::applyGenerators(const TestBenchConfig& b, const WavData* wav,
                                      : (b.wav.loop ? 0 : i0)];
       const float samp = s0 + (s1 - s0) * frac;  // linear interpolation
       const float v = samp * b.wav.peakVolts;
-      emu::set_cv_in(b.wav.dest, v);
+      api_->set_cv_in(b.wav.dest, v);
       cvInNow_[(size_t)b.wav.dest] = v;
       cvInMeter_[(size_t)b.wav.dest].store(v, std::memory_order_relaxed);
 
@@ -332,7 +410,7 @@ void EmuEngine::captureScope() {
   const int src = scopeSource_.load(std::memory_order_relaxed);
   float v = 0.0f;
   if (src >= 0 && src < 8) v = cvInNow_[(size_t)src];
-  else if (src >= 8 && src < 16) v = emu::get_cv_out(src - 8);
+  else if (src >= 8 && src < 16) v = api_->get_cv_out(src - 8);
   else if (src >= 16 && src < 20) v = trigState_[(size_t)(src - 16)] ? 5.0f : 0.0f;
   const uint64_t w = scopeWrite_.load(std::memory_order_relaxed);
   scopeBuf_[(size_t)(w & kScopeMask)] = v;
@@ -351,10 +429,10 @@ void EmuEngine::drainControlEvents() {
     for (int i = 0; i < n; ++i) {
       const auto& e = controlEvents_[(size_t)(start + i)];
       if (e.type == ControlEvent::Button) {
-        emu::set_button((emu::Button)e.a, e.b != 0);
+        api_->set_button(e.a, e.b);
       } else if (e.type == ControlEvent::Encoder) {
-        if (e.a) emu::turn_encoder_right(e.b);
-        else emu::turn_encoder_left(e.b);
+        if (e.a) api_->turn_encoder_right(e.b);
+        else api_->turn_encoder_left(e.b);
       } else if (e.type == ControlEvent::TrigFire) {
         if (e.a >= 0 && e.a < 4)
           trigGen_[(size_t)e.a].pulseS =
@@ -370,10 +448,10 @@ void EmuEngine::drainControlEvents() {
 }
 
 void EmuEngine::publishScreen() {
-  if (!emu::screen_dirty()) return;
+  if (api_->screen_dirty() == 0) return;
   juce::SpinLock::ScopedTryLockType l(screenLock_);
   if (l.isLocked()) {
-    std::memcpy(screenCopy_.data(), emu::screen_pages(), 1024);
+    std::memcpy(screenCopy_.data(), api_->screen_pages(), 1024);
     screenFrames_.fetch_add(1, std::memory_order_relaxed);
   }
 }
@@ -395,12 +473,12 @@ void EmuEngine::fallbackTick() {
   scopeDt_.store(62.5e-6, std::memory_order_relaxed);
   for (int k = 0; k < 16; ++k) {
     applyGenerators(b, wd.get(), 62.5e-6);
-    emu::step_us((k & 1) ? 63 : 62);  // 8*62 + 8*63 = 1000 us
+    api_->step_us((k & 1) ? 63 : 62);  // 8*62 + 8*63 = 1000 us
     captureScope();
   }
-  emu::run_loop_once();
+  api_->run_loop_once();
   for (int i = 0; i < 8; ++i)
-    cvOutMeter_[(size_t)i].store(emu::get_cv_out(i), std::memory_order_relaxed);
+    cvOutMeter_[(size_t)i].store(api_->get_cv_out(i), std::memory_order_relaxed);
   publishScreen();
 }
 
@@ -453,7 +531,7 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
       if (m.deviceChannel >= 0 && m.deviceChannel < numIn) {
         const float v = in[m.deviceChannel][s] * r.inFullScaleVolts * m.gain +
                         m.offsetVolts;
-        emu::set_cv_in(i, v);
+        api_->set_cv_in(i, v);
         cvInNow_[(size_t)i] = v;
         if ((s & 63) == 0) cvInMeter_[(size_t)i].store(v, std::memory_order_relaxed);
       }
@@ -469,7 +547,7 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
         if (high != trigState_[(size_t)i]) {
           trigState_[(size_t)i] = high;
           trigDisp_[(size_t)i].store(high, std::memory_order_relaxed);
-          emu::set_trigger_in(i, high);
+          api_->set_trigger_in(i, high ? 1 : 0);
         }
       }
     }
@@ -481,7 +559,7 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
     usAccum_ += usPerSample_;
     const auto whole = (uint64_t)usAccum_;
     if (whole > 0) {
-      emu::step_us(whole);
+      api_->step_us(whole);
       usAccum_ -= (double)whole;
     }
 
@@ -489,7 +567,7 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
     for (int i = 0; i < 8; ++i) {
       const auto& m = r.cvOut[(size_t)i];
       if (m.deviceChannel >= 0 && m.deviceChannel < numOut) {
-        const float v = emu::get_cv_out(i);
+        const float v = api_->get_cv_out(i);
         out[m.deviceChannel][s] =
             (v * m.gain + m.offsetVolts) / r.outFullScaleVolts;
         if ((s & 63) == 0) cvOutMeter_[(size_t)i].store(v, std::memory_order_relaxed);
@@ -499,6 +577,6 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
   }
 
   // firmware main loop, once per block (menus, saves, housekeeping)
-  emu::run_loop_once();
+  api_->run_loop_once();
   publishScreen();
 }

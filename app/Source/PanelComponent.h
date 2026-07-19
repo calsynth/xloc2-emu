@@ -21,6 +21,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
 
+#include "CorePanel.h"
 #include "EmuEngine.h"
 #include "OledComponent.h"
 #include "RoutingPanel.h"
@@ -94,6 +95,7 @@ class PanelComponent : public juce::Component, private juce::Timer {
 
   void timerCallback() override;
   void openRouting(JackId focus);
+  void openCorePanel();
   void refreshPanelCache();
   juce::Rectangle<float> panelBounds() const;
   // mm-centre + mm half-size -> pixel bounds on the fitted panel rect
@@ -113,9 +115,11 @@ class PanelComponent : public juce::Component, private juce::Timer {
   juce::OwnedArray<Jack> jacks_;
   RoutingPanel routing_;
   TestBenchPanel bench_;
+  CorePanel corePanel_;
   bool benchVisible_ = true;
   juce::TextButton ioButton_{"I/O"};
   juce::TextButton benchButton_{"TEST"};
+  juce::TextButton fwButton_{"FW"};
   juce::TooltipWindow tooltips_{this};
 
   // keyboard state tracking (press AND release for held buttons)
