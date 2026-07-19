@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(FW ${CMAKE_SOURCE_DIR}/firmware/software/src)
-set(STUBS $ENV{HOME}/teensy-x86-stubs/src)
+set(STUBS ${CMAKE_SOURCE_DIR}/third_party/teensy-x86-stubs/src)
 
 # ---------------------------------------------------------------------------
 # Firmware sources (T4.1 / CalSynthXL target), minus hardware-only TUs that

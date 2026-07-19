@@ -13,8 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - name: Fetch teensy-x86-stubs
-        run: git clone --depth 5 https://github.com/newdigate/teensy-x86-stubs $HOME/teensy-x86-stubs
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DXLOC2_BUILD_APP=OFF
       - name: Build
@@ -28,8 +26,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - name: Fetch teensy-x86-stubs
-        run: git clone --depth 5 https://github.com/newdigate/teensy-x86-stubs $HOME/teensy-x86-stubs
       - name: Configure
         run: >
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
