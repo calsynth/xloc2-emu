@@ -423,6 +423,7 @@ juce::Rectangle<float> PanelComponent::panelBounds() const {
   // strip at the bottom and small margins elsewhere
   auto area = getLocalBounds().toFloat();
   area.removeFromRight((float)benchWidth());
+  if (benchVisible_) area.removeFromRight(24.0f);  // gap panel <-> sidebar
   area.removeFromBottom(26.0f);
   area = area.reduced(6.0f);
   float h = area.getHeight();
@@ -498,7 +499,8 @@ void PanelComponent::resized() {
   jacks_[ji++]->setBounds(placeMm(L.midiOut, L.jackRadius));
 
   const int bw = benchWidth();
-  bench_.setBounds(getWidth() - bw, 0, bw, getHeight());
+  bench_.setBounds(getWidth() - bw, juce::roundToInt(pb.getY()), bw,
+                   juce::roundToInt(pb.getHeight()));
 
   const int leftW = getWidth() - bw;
   const int rw = juce::jmin(440, getWidth() - 30);
