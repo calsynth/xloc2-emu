@@ -88,14 +88,9 @@ class PanelComponent::Encoder : public juce::Component {
       g.drawLine(x1, y1, x2, y2, 1.4f);
     }
 
-    // top face + indicator
+    // top face (no indicator line -- endless encoder, like the hardware)
     g.setColour(juce::Colour(pressed_ ? 0xff1d2126 : 0xff272b32));
     g.fillEllipse(c.x - kr * 0.78f, c.y - kr * 0.78f, kr * 1.56f, kr * 1.56f);
-    g.setColour(juce::Colour(0xffe8ecf4));
-    const float ix = c.x + std::sin(angle_) * kr * 0.66f;
-    const float iy = c.y - std::cos(angle_) * kr * 0.66f;
-    g.drawLine(c.x + std::sin(angle_) * kr * 0.2f,
-               c.y - std::cos(angle_) * kr * 0.2f, ix, iy, 2.5f);
 
     if (hover_ || pressed_) {
       g.setColour(juce::Colour(kAccent).withAlpha(pressed_ ? 0.9f : 0.55f));
@@ -245,17 +240,23 @@ class PanelComponent::Jack : public juce::Component,
                                              juce::PathStrokeType::rounded));
     }
 
-    // hex nut (metallic, reads on white)
-    const float nut = cell * 0.72f;
-    juce::Path hex;
-    hex.addPolygon({c.x, c.y}, 6, nut, juce::MathConstants<float>::pi / 6.0f);
+    // round knurled nut (metallic, reads on white)
+    const float nut = cell * 0.68f;
     juce::ColourGradient grad(juce::Colour(0xffc7cbd1), c.x - nut, c.y - nut,
                               juce::Colour(0xff6f757e), c.x + nut, c.y + nut,
                               false);
     g.setGradientFill(grad);
-    g.fillPath(hex);
+    g.fillEllipse(c.x - nut, c.y - nut, nut * 2.0f, nut * 2.0f);
+    // knurling: short radial ticks around the rim
+    g.setColour(juce::Colour(0xff575d66));
+    for (int i = 0; i < 28; ++i) {
+      const float a = (float)i * juce::MathConstants<float>::twoPi / 28.0f;
+      g.drawLine(c.x + std::sin(a) * nut * 0.86f, c.y - std::cos(a) * nut * 0.86f,
+                 c.x + std::sin(a) * nut * 0.985f, c.y - std::cos(a) * nut * 0.985f,
+                 1.0f);
+    }
     g.setColour(juce::Colour(0xff3a3e45));
-    g.strokePath(hex, juce::PathStrokeType(1.1f));
+    g.drawEllipse(c.x - nut, c.y - nut, nut * 2.0f, nut * 2.0f, 1.1f);
 
     // barrel + hole
     const float barrel = cell * 0.46f;
