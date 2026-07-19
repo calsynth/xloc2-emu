@@ -18,23 +18,44 @@ juce::Colour meterColour(float volts) {
 // ---------------------------------------------------------------------------
 // Encoder — knurled knob; drag/wheel = detents, press = encoder push
 // ---------------------------------------------------------------------------
-class PanelComponent::Encoder : public juce::Component {
+// Gesture model (mirrors the hardware):
+//   drag                = plain turn (no push)
+//   shift+drag          = push + turn
+//   quick click         = short push (press, ~60 ms, release)
+//   click & hold still  = long press (push held until mouse released)
+//   mouse wheel / keys  = plain turns
+class PanelComponent::Encoder : public juce::Component, private juce::Timer {
  public:
   Encoder(EmuEngine& engine, bool right) : engine_(engine), right_(right) {
     setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
   }
 
   void mouseDown(const juce::MouseEvent& e) override {
-    pressed_ = true;
+    gesture_ = Gesture::Undecided;
     dragAccumPx_ = 0.0f;
+    movedPx_ = 0.0f;
     lastY_ = e.position.y;
-    engine_.postButton(right_ ? emu::ENC_R_PUSH : emu::ENC_L_PUSH, true);
+    shiftAtDown_ = e.mods.isShiftDown();
+    startTimer(300);  // stationary hold -> long press
     repaint();
   }
 
   void mouseDrag(const juce::MouseEvent& e) override {
     const float dy = lastY_ - e.position.y;  // up = clockwise
     lastY_ = e.position.y;
+    movedPx_ += std::abs(dy);
+    if (gesture_ == Gesture::Undecided && movedPx_ > 4.0f) {
+      stopTimer();
+      if (shiftAtDown_) {
+        gesture_ = Gesture::PushTurn;
+        setPush(true);
+      } else {
+        gesture_ = Gesture::Turn;
+      }
+    }
+    if (gesture_ != Gesture::Turn && gesture_ != Gesture::PushTurn &&
+        gesture_ != Gesture::Hold)
+      return;
     dragAccumPx_ += dy;
     constexpr float pxPerDetent = 11.0f;
     const int n = (int)(dragAccumPx_ / pxPerDetent);
@@ -45,8 +66,25 @@ class PanelComponent::Encoder : public juce::Component {
   }
 
   void mouseUp(const juce::MouseEvent&) override {
-    pressed_ = false;
-    engine_.postButton(right_ ? emu::ENC_R_PUSH : emu::ENC_L_PUSH, false);
+    stopTimer();
+    switch (gesture_) {
+      case Gesture::Undecided: {
+        // quick stationary click -> short push pulse
+        setPush(true);
+        auto safe = juce::Component::SafePointer<Encoder>(this);
+        juce::Timer::callAfterDelay(60, [safe] {
+          if (safe != nullptr) safe->setPush(false);
+        });
+        break;
+      }
+      case Gesture::PushTurn:
+      case Gesture::Hold:
+        setPush(false);
+        break;
+      default:
+        break;
+    }
+    gesture_ = Gesture::Idle;
     repaint();
   }
 
@@ -99,6 +137,25 @@ class PanelComponent::Encoder : public juce::Component {
   }
 
  private:
+  enum class Gesture { Idle, Undecided, Turn, PushTurn, Hold };
+
+  void timerCallback() override {
+    // held still past the threshold: this is a long press
+    stopTimer();
+    if (gesture_ == Gesture::Undecided) {
+      gesture_ = Gesture::Hold;
+      setPush(true);
+    }
+  }
+
+  void setPush(bool down) {
+    if (pushed_ == down) return;
+    pushed_ = down;
+    pressed_ = down;  // accent ring reflects what the firmware sees
+    engine_.postButton(right_ ? emu::ENC_R_PUSH : emu::ENC_L_PUSH, down);
+    repaint();
+  }
+
   void turn(int detents) {
     engine_.postEncoder(right_, detents);
     angle_ += (float)detents * juce::MathConstants<float>::twoPi / 24.0f;
@@ -107,8 +164,10 @@ class PanelComponent::Encoder : public juce::Component {
 
   EmuEngine& engine_;
   bool right_;
-  bool pressed_ = false, hover_ = false;
-  float lastY_ = 0.0f, dragAccumPx_ = 0.0f;
+  bool pressed_ = false, hover_ = false, pushed_ = false;
+  bool shiftAtDown_ = false;
+  Gesture gesture_ = Gesture::Idle;
+  float lastY_ = 0.0f, dragAccumPx_ = 0.0f, movedPx_ = 0.0f;
   float angle_ = 0.0f;
 };
 
