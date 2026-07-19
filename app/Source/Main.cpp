@@ -38,13 +38,13 @@ class XLOC2Application : public juce::JUCEApplication {
   class MainWindow : public juce::DocumentWindow {
    public:
     MainWindow(const juce::String& name, EmuEngine& engine)
-        : DocumentWindow(name, juce::Colour(0xff0b0d10),
+        : DocumentWindow(name, juce::Colour(0xff17181b),
                          DocumentWindow::allButtons) {
       setUsingNativeTitleBar(true);
       setContentOwned(new PanelComponent(engine), true);
       setResizable(true, true);
       setResizeLimits(400, 630, 4096, 4096);
-      centreWithSize(660, 1040);
+      centreWithSize(650, 1000);
       setVisible(true);
     }
 

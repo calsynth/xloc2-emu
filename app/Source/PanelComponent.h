@@ -1,7 +1,11 @@
-// PanelComponent — clean vector recreation of the XLOC2 front panel.
+// PanelComponent — photo-faithful XLOC2 front panel.
 //
-// Geometry lives in PanelLayout (normalised 0..1 panel coordinates) so the
-// whole panel can be re-skinned / matched to photos by editing one struct.
+// The background is the real panel artwork (app/Assets/panel.png, embedded
+// via BinaryData) drawn 1:1 onto the panel rect. All control geometry lives
+// in PanelLayout in MILLIMETRES from the panel's top-left corner (panel is
+// 80.90 x 128.50 mm) and is converted to pixels against the fitted panel
+// rect, so widgets land exactly on the printed holes.
+//
 // Interaction:
 //   encoders   vertical drag or mouse wheel = detents; press = encoder push
 //              (down on mouseDown, up on mouseUp — so drag-while-pressed
@@ -9,8 +13,9 @@
 //   buttons    A/X/B/Y/Z click (down/up tracked)
 //   keyboard   Up/Down = right encoder, Left/Right = left encoder,
 //              Return = right push, Escape = left push, A/B/X/Y/Z = buttons
-//   jacks      Eurorack sockets with live meter rings; click opens the
-//              routing panel focused on that jack
+//   jacks      CV/TRIG sockets show live meter rings; click opens the
+//              routing panel focused on that jack. Audio/MIDI jacks are
+//              visual-only until a later phase (tooltip says so).
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -20,32 +25,37 @@
 #include "OledComponent.h"
 #include "RoutingPanel.h"
 
-// All panel geometry in one place, in normalised panel units (fractions of
-// panel width / height). Tweak here when Struan's real panel art arrives.
+// All panel geometry in one place, in millimetres from the panel top-left.
+// Values supplied by Calsynth to match the production panel artwork.
 struct PanelLayout {
-  // 16HP Eurorack portrait: ~81mm x 128.5mm
-  float aspect = 81.0f / 128.5f;
+  static constexpr float widthMm = 80.90f;
+  static constexpr float heightMm = 128.50f;
+  static constexpr float aspect = widthMm / heightMm;
 
-  juce::Rectangle<float> oled{0.125f, 0.075f, 0.75f, 0.205f};
+  // Screen aperture (black rect in the art); OLED fills it.
+  juce::Rectangle<float> oled{21.35f, 15.68f, 38.19f, 19.99f};
 
-  juce::Point<float> encL{0.26f, 0.36f}, encR{0.74f, 0.36f};
-  float encRadius = 0.082f;  // fraction of panel width
+  // 5.1 mm button holes (letter printed beside each in the art)
+  juce::Point<float> btnA{12.51f, 14.97f}, btnB{68.38f, 14.97f};
+  juce::Point<float> btnX{12.51f, 30.21f}, btnY{68.38f, 30.21f};
+  juce::Point<float> btnZ{40.44f, 51.79f};
+  float btnRadius = 3.6f;  // component half-size, mm (cap + shadow)
 
-  // NOTE: button grouping is an assumption (A/B by the left encoder, X/Y by
-  // the right, Z centred under the screen) — adjust freely.
-  juce::Point<float> btnA{0.075f, 0.325f}, btnB{0.075f, 0.395f};
-  juce::Point<float> btnX{0.925f, 0.325f}, btnY{0.925f, 0.395f};
-  juce::Point<float> btnZ{0.50f, 0.36f};
-  float btnRadius = 0.030f;
+  // Encoder shafts; the knob overhangs the 7.2-7.5 mm hole (~13 mm dia)
+  juce::Point<float> encL{12.50f, 49.88f}, encR{68.37f, 49.88f};
+  float encRadius = 7.3f;  // component half-size, mm
 
-  // jack grid: 5 rows x 4 cols (TR1-4 / CVIN1-4 / CVIN5-8 / OUT A-D / OUT E-H)
-  float jackTopY = 0.505f;
-  float jackRowPitch = 0.0985f;
-  float jackLeftX = 0.155f;
-  float jackColPitch = 0.23f;
-  float jackRadius = 0.047f;  // fraction of panel width (cell half-size)
+  // Jack columns (6.2 mm holes) and the shared 4-row grid
+  float colTrig = 17.90f;
+  float colCvIn14 = 30.28f, colCvIn58 = 40.44f;
+  float colCvOutAD = 52.82f, colCvOutEH = 62.98f;
+  float colAudio = 75.68f;
+  float jackRowY[4] = {75.91f, 87.97f, 100.03f, 112.10f};
 
-  float brandingY = 0.028f;  // centre of "CALSYNTH  XLOC2" line
+  // MIDI (visual-only)
+  juce::Point<float> midiIn{5.05f, 100.03f}, midiOut{5.21f, 112.10f};
+
+  float jackRadius = 5.0f;  // component half-size, mm (nut + meter ring)
 };
 
 class PanelComponent : public juce::Component, private juce::Timer {
@@ -67,10 +77,14 @@ class PanelComponent : public juce::Component, private juce::Timer {
   void timerCallback() override;
   void openRouting(JackId focus);
   juce::Rectangle<float> panelBounds() const;
-  juce::Rectangle<int> place(juce::Point<float> centre, float radiusFrac) const;
+  // mm-centre + mm half-size -> pixel bounds on the fitted panel rect
+  juce::Rectangle<int> placeMm(juce::Point<float> centreMm, float radiusMm) const;
 
   EmuEngine& engine_;
   PanelLayout layout_;
+
+  juce::Image panelArt_;     // full-res artwork from BinaryData
+  juce::Image panelScaled_;  // cached rescale for the current panel rect
 
   OledComponent oled_;
   std::unique_ptr<Encoder> encL_, encR_;
@@ -78,6 +92,7 @@ class PanelComponent : public juce::Component, private juce::Timer {
   juce::OwnedArray<Jack> jacks_;
   RoutingPanel routing_;
   juce::TextButton ioButton_{"I/O"};
+  juce::TooltipWindow tooltips_{this};
 
   // keyboard state tracking (press AND release for held buttons)
   struct KeyBinding { int keyCode; int altKeyCode; int button; bool down; };

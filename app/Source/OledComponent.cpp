@@ -39,18 +39,18 @@ void OledComponent::rebuildImage() {
 void OledComponent::paint(juce::Graphics& g) {
   g.fillAll(juce::Colour(kBezel));
 
-  // integer scale, centered
-  const int scale = juce::jmax(1, juce::jmin(getWidth() / 128, getHeight() / 64));
-  const int w = 128 * scale, h = 64 * scale;
-  const juce::Rectangle<int> area((getWidth() - w) / 2, (getHeight() - h) / 2, w, h);
+  // fill the panel's screen aperture edge-to-edge (the aperture is ~2:1,
+  // matching the 128x64 active area)
+  const auto area = getLocalBounds().toFloat();
+  const float scaleY = area.getHeight() / 64.0f;
 
   // soft glow pass: the same frame, slightly enlarged and smoothed
   {
     juce::Graphics::ScopedSaveState ss(g);
     g.setImageResamplingQuality(juce::Graphics::mediumResamplingQuality);
     g.setOpacity(0.28f);
-    const auto glow = area.toFloat().expanded((float)scale * 0.9f);
-    g.drawImage(frame_, glow, juce::RectanglePlacement::stretchToFit);
+    g.drawImage(frame_, area.expanded(scaleY * 0.9f),
+                juce::RectanglePlacement::stretchToFit);
   }
 
   // crisp pixel pass (nearest-neighbour)
@@ -58,17 +58,18 @@ void OledComponent::paint(juce::Graphics& g) {
     juce::Graphics::ScopedSaveState ss(g);
     g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
     g.setOpacity(1.0f);
-    g.drawImage(frame_, area.toFloat(), juce::RectanglePlacement::stretchToFit);
+    g.drawImage(frame_, area, juce::RectanglePlacement::stretchToFit);
   }
 
   // subtle scanlines between pixel rows
-  if (scale >= 3) {
+  if (scaleY >= 3.0f) {
     g.setColour(juce::Colours::black.withAlpha(0.16f));
     for (int y = 1; y < 64; ++y)
-      g.fillRect(area.getX(), area.getY() + y * scale - 1, area.getWidth(), 1);
+      g.fillRect(area.getX(), area.getY() + (float)y * scaleY - 1.0f,
+                 area.getWidth(), 1.0f);
   }
 
   // faint glass edge
   g.setColour(juce::Colours::white.withAlpha(0.06f));
-  g.drawRect(area.expanded(1), 1);
+  g.drawRect(area, 1.0f);
 }

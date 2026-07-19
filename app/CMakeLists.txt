@@ -8,6 +8,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(JUCE)
 
+# Embedded assets (real front-panel artwork from Calsynth)
+juce_add_binary_data(xloc2_assets SOURCES Assets/panel.png)
+
 juce_add_gui_app(xloc2
   VERSION 0.1.0
   PRODUCT_NAME "XLOC2"
@@ -34,6 +37,7 @@ target_compile_definitions(xloc2 PRIVATE
 
 target_link_libraries(xloc2 PRIVATE
   firmware_core
+  xloc2_assets
   juce::juce_gui_extra
   juce::juce_audio_devices
   juce::juce_audio_utils

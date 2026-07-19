@@ -1,20 +1,17 @@
 #include "PanelComponent.h"
 
+#include "BinaryData.h"
 #include "../../core/emu.h"
 
 namespace {
-constexpr uint32_t kWindowBg = 0xff0b0d10;
-constexpr uint32_t kPanelTop = 0xff20242b;
-constexpr uint32_t kPanelBottom = 0xff15181d;
-constexpr uint32_t kPanelEdge = 0xff31363f;
-constexpr uint32_t kSilk = 0xffaeb6c2;
-constexpr uint32_t kAccent = 0xff5a8dee;
+constexpr uint32_t kWindowBg = 0xff17181b;  // letterbox / status margin
+constexpr uint32_t kAccent = 0xff2f6fed;    // focus/indicator blue
 
 juce::Colour meterColour(float volts) {
   const float mag = juce::jlimit(0.0f, 1.0f, std::abs(volts) / 10.0f);
   if (volts >= 0.0f)
-    return juce::Colour(0xffffb04d).interpolatedWith(juce::Colour(0xffff5a3c), mag);
-  return juce::Colour(0xff64c7ff).interpolatedWith(juce::Colour(0xff3c62ff), mag);
+    return juce::Colour(0xffff9a1f).interpolatedWith(juce::Colour(0xffe83a1f), mag);
+  return juce::Colour(0xff2f9fe8).interpolatedWith(juce::Colour(0xff2848e8), mag);
 }
 }  // namespace
 
@@ -53,6 +50,9 @@ class PanelComponent::Encoder : public juce::Component {
     repaint();
   }
 
+  void mouseEnter(const juce::MouseEvent&) override { hover_ = true; repaint(); }
+  void mouseExit(const juce::MouseEvent&) override { hover_ = false; repaint(); }
+
   void mouseWheelMove(const juce::MouseEvent&,
                       const juce::MouseWheelDetails& wheel) override {
     const int n = wheel.deltaY > 0.0f ? 1 : (wheel.deltaY < 0.0f ? -1 : 0);
@@ -64,19 +64,21 @@ class PanelComponent::Encoder : public juce::Component {
     const auto c = b.getCentre();
     const float r = juce::jmin(b.getWidth(), b.getHeight()) * 0.5f - 1.0f;
 
-    // shadow / base
-    g.setColour(juce::Colours::black.withAlpha(0.55f));
-    g.fillEllipse(c.x - r, c.y - r + 2.0f, r * 2.0f, r * 2.0f);
+    // soft drop shadow onto the white panel
+    g.setColour(juce::Colours::black.withAlpha(0.30f));
+    g.fillEllipse(c.x - r, c.y - r + 2.5f, r * 2.0f, r * 2.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.18f));
+    g.fillEllipse(c.x - r - 1.5f, c.y - r + 1.0f, r * 2.0f + 3.0f, r * 2.0f + 3.0f);
 
     const float kr = pressed_ ? r * 0.94f : r * 0.97f;
     juce::ColourGradient grad(juce::Colour(0xff3a3f48), c.x - kr * 0.5f,
-                              c.y - kr * 0.7f, juce::Colour(0xff181b20),
+                              c.y - kr * 0.7f, juce::Colour(0xff14161a),
                               c.x + kr * 0.4f, c.y + kr * 0.9f, true);
     g.setGradientFill(grad);
     g.fillEllipse(c.x - kr, c.y - kr, kr * 2.0f, kr * 2.0f);
 
     // knurl ticks
-    g.setColour(juce::Colour(0xff0d0f12));
+    g.setColour(juce::Colour(0xff05060a));
     for (int i = 0; i < 24; ++i) {
       const float a = angle_ + (float)i * juce::MathConstants<float>::twoPi / 24.0f;
       const float x1 = c.x + std::sin(a) * kr * 0.86f;
@@ -87,13 +89,18 @@ class PanelComponent::Encoder : public juce::Component {
     }
 
     // top face + indicator
-    g.setColour(juce::Colour(pressed_ ? 0xff23272e : 0xff2b3038));
+    g.setColour(juce::Colour(pressed_ ? 0xff1d2126 : 0xff272b32));
     g.fillEllipse(c.x - kr * 0.78f, c.y - kr * 0.78f, kr * 1.56f, kr * 1.56f);
-    g.setColour(juce::Colour(kAccent));
-    const float ix = c.x + std::sin(angle_) * kr * 0.62f;
-    const float iy = c.y - std::cos(angle_) * kr * 0.62f;
+    g.setColour(juce::Colour(0xffe8ecf4));
+    const float ix = c.x + std::sin(angle_) * kr * 0.66f;
+    const float iy = c.y - std::cos(angle_) * kr * 0.66f;
     g.drawLine(c.x + std::sin(angle_) * kr * 0.2f,
                c.y - std::cos(angle_) * kr * 0.2f, ix, iy, 2.5f);
+
+    if (hover_ || pressed_) {
+      g.setColour(juce::Colour(kAccent).withAlpha(pressed_ ? 0.9f : 0.55f));
+      g.drawEllipse(c.x - kr, c.y - kr, kr * 2.0f, kr * 2.0f, 1.6f);
+    }
   }
 
  private:
@@ -105,7 +112,7 @@ class PanelComponent::Encoder : public juce::Component {
 
   EmuEngine& engine_;
   bool right_;
-  bool pressed_ = false;
+  bool pressed_ = false, hover_ = false;
   float lastY_ = 0.0f, dragAccumPx_ = 0.0f;
   float angle_ = 0.0f;
 };
@@ -127,50 +134,69 @@ class PanelComponent::PanelButton : public juce::Component {
     engine_.postButton(button_, false);
     repaint();
   }
+  void mouseEnter(const juce::MouseEvent&) override { hover_ = true; repaint(); }
+  void mouseExit(const juce::MouseEvent&) override { hover_ = false; repaint(); }
 
   void paint(juce::Graphics& g) override {
     const auto b = getLocalBounds().toFloat().reduced(1.0f);
     const auto c = b.getCentre();
     const float r = juce::jmin(b.getWidth(), b.getHeight()) * 0.5f;
 
-    g.setColour(juce::Colour(0xff0e1013));  // bezel
-    g.fillEllipse(c.x - r, c.y - r, r * 2.0f, r * 2.0f);
+    // shadow + dark collar covering the printed hole
+    g.setColour(juce::Colours::black.withAlpha(0.28f));
+    g.fillEllipse(c.x - r * 0.94f, c.y - r * 0.94f + 1.5f, r * 1.88f, r * 1.88f);
+    g.setColour(juce::Colour(0xff23262b));
+    g.fillEllipse(c.x - r * 0.92f, c.y - r * 0.92f, r * 1.84f, r * 1.84f);
 
-    const float cr = pressed_ ? r * 0.74f : r * 0.8f;
+    // light grey tactile cap; pressed = darker + inset
+    const float cr = pressed_ ? r * 0.68f : r * 0.76f;
+    const float cy = pressed_ ? c.y + 0.6f : c.y;
     juce::ColourGradient grad(
-        juce::Colour(pressed_ ? 0xff2c313a : 0xff444a55), c.x - cr * 0.4f,
-        c.y - cr * 0.6f, juce::Colour(pressed_ ? 0xff181b20 : 0xff23272e),
-        c.x + cr * 0.4f, c.y + cr * 0.8f, true);
+        juce::Colour(pressed_ ? 0xffa7abb2 : 0xffe4e6ea), c.x - cr * 0.4f,
+        cy - cr * 0.6f, juce::Colour(pressed_ ? 0xff83878e : 0xffb9bdc4),
+        c.x + cr * 0.4f, cy + cr * 0.8f, true);
     g.setGradientFill(grad);
-    g.fillEllipse(c.x - cr, c.y - cr, cr * 2.0f, cr * 2.0f);
+    g.fillEllipse(c.x - cr, cy - cr, cr * 2.0f, cr * 2.0f);
+    g.setColour(juce::Colours::black.withAlpha(pressed_ ? 0.55f : 0.35f));
+    g.drawEllipse(c.x - cr, cy - cr, cr * 2.0f, cr * 2.0f, 1.0f);
 
+    if (hover_ && !pressed_) {
+      g.setColour(juce::Colour(kAccent).withAlpha(0.6f));
+      g.drawEllipse(c.x - r * 0.92f, c.y - r * 0.92f, r * 1.84f, r * 1.84f, 1.4f);
+    }
     if (pressed_) {
-      g.setColour(juce::Colour(kAccent).withAlpha(0.8f));
-      g.drawEllipse(c.x - cr, c.y - cr, cr * 2.0f, cr * 2.0f, 1.5f);
+      g.setColour(juce::Colour(kAccent).withAlpha(0.85f));
+      g.drawEllipse(c.x - r * 0.92f, c.y - r * 0.92f, r * 1.84f, r * 1.84f, 1.6f);
     }
   }
 
  private:
   EmuEngine& engine_;
   int button_;
-  bool pressed_ = false;
+  bool pressed_ = false, hover_ = false;
 };
 
 // ---------------------------------------------------------------------------
-// Jack — 3.5mm socket with a live meter ring; click opens routing
+// Jack — 3.5mm Thonkiconn-style socket with a live meter ring; click opens
+// routing. Passive kind (audio/MIDI) is visual-only for now.
 // ---------------------------------------------------------------------------
-class PanelComponent::Jack : public juce::Component {
+class PanelComponent::Jack : public juce::Component,
+                             public juce::SettableTooltipClient {
  public:
-  enum class Kind { TrigIn, CvIn, CvOut };
+  enum class Kind { TrigIn, CvIn, CvOut, Passive };
 
   Jack(EmuEngine& engine, Kind kind, int index, JackId id,
        std::function<void(JackId)> onClick)
       : engine_(engine), kind_(kind), index_(index), id_(id),
         onClick_(std::move(onClick)) {
-    setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    if (kind_ == Kind::Passive)
+      setTooltip("coming in a later phase");
+    else
+      setMouseCursor(juce::MouseCursor::PointingHandCursor);
   }
 
   void updateMeter() {
+    if (kind_ == Kind::Passive) return;
     if (kind_ == Kind::TrigIn) {
       const bool h = engine_.trigInHigh(index_);
       if (h != shownHigh_) { shownHigh_ = h; repaint(); }
@@ -182,46 +208,54 @@ class PanelComponent::Jack : public juce::Component {
   }
 
   void mouseUp(const juce::MouseEvent& e) override {
+    if (kind_ == Kind::Passive) return;
     if (getLocalBounds().contains(e.getPosition()) && onClick_) onClick_(id_);
   }
+  void mouseEnter(const juce::MouseEvent&) override { hover_ = true; repaint(); }
+  void mouseExit(const juce::MouseEvent&) override { hover_ = false; repaint(); }
 
   void paint(juce::Graphics& g) override {
     const auto b = getLocalBounds().toFloat();
     const auto c = b.getCentre();
     const float cell = juce::jmin(b.getWidth(), b.getHeight()) * 0.5f;
 
-    // meter ring
-    const float mr = cell * 0.92f;
-    g.setColour(juce::Colour(0xff23272e));
-    g.drawEllipse(c.x - mr, c.y - mr, mr * 2.0f, mr * 2.0f, 2.0f);
+    // live meter ring (glow) around the nut
+    const float mr = cell * 0.90f;
+    const bool active = std::abs(shownVolts_) > 0.05f;
     if (kind_ == Kind::TrigIn) {
       if (shownHigh_) {
-        g.setColour(juce::Colour(0xff6cf07a));
-        g.drawEllipse(c.x - mr, c.y - mr, mr * 2.0f, mr * 2.0f, 2.4f);
+        g.setColour(juce::Colour(0xff17b83a).withAlpha(0.35f));
+        g.drawEllipse(c.x - mr, c.y - mr, mr * 2.0f, mr * 2.0f, 5.0f);
+        g.setColour(juce::Colour(0xff17b83a));
+        g.drawEllipse(c.x - mr, c.y - mr, mr * 2.0f, mr * 2.0f, 2.2f);
       }
-    } else if (std::abs(shownVolts_) > 0.02f) {
+    } else if (kind_ != Kind::Passive && active) {
       // 12 o'clock = 0 V; positive sweeps clockwise, negative anticlockwise
       const float sweep = juce::jlimit(-1.0f, 1.0f, shownVolts_ / 10.0f) *
                           juce::MathConstants<float>::pi;
       juce::Path arc;
       arc.addCentredArc(c.x, c.y, mr, mr, 0.0f, sweep < 0 ? sweep : 0.0f,
                         sweep < 0 ? 0.0f : sweep, true);
-      g.setColour(meterColour(shownVolts_));
-      g.strokePath(arc, juce::PathStrokeType(2.4f, juce::PathStrokeType::curved,
+      const auto col = meterColour(shownVolts_);
+      g.setColour(col.withAlpha(0.30f));
+      g.strokePath(arc, juce::PathStrokeType(5.0f, juce::PathStrokeType::curved,
+                                             juce::PathStrokeType::rounded));
+      g.setColour(col);
+      g.strokePath(arc, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved,
                                              juce::PathStrokeType::rounded));
     }
 
-    // hex nut
-    const float nut = cell * 0.68f;
+    // hex nut (metallic, reads on white)
+    const float nut = cell * 0.72f;
     juce::Path hex;
     hex.addPolygon({c.x, c.y}, 6, nut, juce::MathConstants<float>::pi / 6.0f);
-    juce::ColourGradient grad(juce::Colour(0xff3d434d), c.x - nut, c.y - nut,
-                              juce::Colour(0xff1a1d22), c.x + nut, c.y + nut,
+    juce::ColourGradient grad(juce::Colour(0xffc7cbd1), c.x - nut, c.y - nut,
+                              juce::Colour(0xff6f757e), c.x + nut, c.y + nut,
                               false);
     g.setGradientFill(grad);
     g.fillPath(hex);
-    g.setColour(juce::Colour(0xff0c0e11));
-    g.strokePath(hex, juce::PathStrokeType(1.0f));
+    g.setColour(juce::Colour(0xff3a3e45));
+    g.strokePath(hex, juce::PathStrokeType(1.1f));
 
     // barrel + hole
     const float barrel = cell * 0.46f;
@@ -230,8 +264,13 @@ class PanelComponent::Jack : public juce::Component {
     const float hole = cell * 0.30f;
     g.setColour(juce::Colours::black);
     g.fillEllipse(c.x - hole, c.y - hole, hole * 2.0f, hole * 2.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.10f));
+    g.setColour(juce::Colours::white.withAlpha(0.22f));
     g.drawEllipse(c.x - barrel, c.y - barrel, barrel * 2.0f, barrel * 2.0f, 1.0f);
+
+    if (hover_ && kind_ != Kind::Passive) {
+      g.setColour(juce::Colour(kAccent).withAlpha(0.55f));
+      g.drawEllipse(c.x - mr, c.y - mr, mr * 2.0f, mr * 2.0f, 1.6f);
+    }
   }
 
  private:
@@ -241,7 +280,7 @@ class PanelComponent::Jack : public juce::Component {
   JackId id_;
   std::function<void(JackId)> onClick_;
   float shownVolts_ = 0.0f;
-  bool shownHigh_ = false;
+  bool shownHigh_ = false, hover_ = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -249,19 +288,23 @@ class PanelComponent::Jack : public juce::Component {
 // ---------------------------------------------------------------------------
 PanelComponent::PanelComponent(EmuEngine& engine)
     : engine_(engine), oled_(engine), routing_(engine) {
+  panelArt_ = juce::ImageCache::getFromMemory(BinaryData::panel_png,
+                                              BinaryData::panel_pngSize);
+
   encL_ = std::make_unique<Encoder>(engine_, false);
   encR_ = std::make_unique<Encoder>(engine_, true);
   addAndMakeVisible(oled_);
   addAndMakeVisible(*encL_);
   addAndMakeVisible(*encR_);
 
-  // order matches paint(): A, B, X, Y, Z
+  // order matches resized(): A, B, X, Y, Z
   for (int b : {emu::BUTTON_A, emu::BUTTON_B, emu::BUTTON_X, emu::BUTTON_Y,
                 emu::BUTTON_Z})
     addAndMakeVisible(buttons_.add(new PanelButton(engine_, b)));
 
   auto onJack = [this](JackId id) { openRouting(id); };
-  // grid order: row-major — TR1..4, CV in 1..4, CV in 5..8, OUT A..D, OUT E..H
+  // active jacks, column-major to match resized():
+  // TRIG 1-4, CV IN 1-4, CV IN 5-8, CV OUT A-D, CV OUT E-H
   for (int i = 0; i < 4; ++i)
     jacks_.add(new Jack(engine_, Jack::Kind::TrigIn, i,
                         (JackId)((int)JackId::TrigIn1 + i), onJack));
@@ -271,6 +314,9 @@ PanelComponent::PanelComponent(EmuEngine& engine)
   for (int i = 0; i < 8; ++i)
     jacks_.add(new Jack(engine_, Jack::Kind::CvOut, i,
                         (JackId)((int)JackId::CvOut1 + i), onJack));
+  // passive (visual-only) jacks: AUDIO IN L/R, OUT L/R, MIDI IN/OUT
+  for (int i = 0; i < 6; ++i)
+    jacks_.add(new Jack(engine_, Jack::Kind::Passive, i, JackId::None, nullptr));
   for (auto* j : jacks_) addAndMakeVisible(j);
 
   routing_.setVisible(false);
@@ -281,6 +327,9 @@ PanelComponent::PanelComponent(EmuEngine& engine)
   addChildComponent(routing_);
 
   ioButton_.setTooltip("Audio device & CV routing");
+  ioButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a2d33));
+  ioButton_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3a3f48));
+  ioButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffc9ced8));
   ioButton_.onClick = [this] { openRouting(JackId::None); };
   addAndMakeVisible(ioButton_);
 
@@ -293,7 +342,7 @@ PanelComponent::PanelComponent(EmuEngine& engine)
             {juce::KeyPress::escapeKey, 0, emu::ENC_L_PUSH, false}}};
 
   setWantsKeyboardFocus(true);
-  setSize(660, 1040);
+  setSize(650, 1000);
   startTimerHz(30);
 }
 
@@ -319,22 +368,26 @@ void PanelComponent::openRouting(JackId focus) {
 }
 
 juce::Rectangle<float> PanelComponent::panelBounds() const {
-  auto area = getLocalBounds().toFloat().reduced(14.0f);
+  // reserve a status strip at the bottom; small margins elsewhere
+  auto area = getLocalBounds().toFloat();
+  area.removeFromBottom(26.0f);
+  area = area.reduced(6.0f);
   float h = area.getHeight();
-  float w = h * layout_.aspect;
+  float w = h * PanelLayout::aspect;
   if (w > area.getWidth()) {
     w = area.getWidth();
-    h = w / layout_.aspect;
+    h = w / PanelLayout::aspect;
   }
   return {area.getCentreX() - w * 0.5f, area.getCentreY() - h * 0.5f, w, h};
 }
 
-juce::Rectangle<int> PanelComponent::place(juce::Point<float> centre,
-                                           float radiusFrac) const {
+juce::Rectangle<int> PanelComponent::placeMm(juce::Point<float> centreMm,
+                                             float radiusMm) const {
   const auto pb = panelBounds();
-  const float r = radiusFrac * pb.getWidth();
-  return juce::Rectangle<float>(pb.getX() + centre.x * pb.getWidth() - r,
-                                pb.getY() + centre.y * pb.getHeight() - r,
+  const float s = pb.getWidth() / PanelLayout::widthMm;  // px per mm
+  const float r = radiusMm * s;
+  return juce::Rectangle<float>(pb.getX() + centreMm.x * s - r,
+                                pb.getY() + centreMm.y * s - r,
                                 r * 2.0f, r * 2.0f)
       .getSmallestIntegerContainer();
 }
@@ -342,105 +395,68 @@ juce::Rectangle<int> PanelComponent::place(juce::Point<float> centre,
 void PanelComponent::resized() {
   const auto pb = panelBounds();
   const auto& L = layout_;
+  const float s = pb.getWidth() / PanelLayout::widthMm;
 
-  oled_.setBounds(juce::Rectangle<float>(pb.getX() + L.oled.getX() * pb.getWidth(),
-                                         pb.getY() + L.oled.getY() * pb.getHeight(),
-                                         L.oled.getWidth() * pb.getWidth(),
-                                         L.oled.getHeight() * pb.getHeight())
+  // cache the artwork scaled to the current panel rect
+  const int pw = juce::roundToInt(pb.getWidth());
+  const int ph = juce::roundToInt(pb.getHeight());
+  if (panelArt_.isValid() && pw > 0 && ph > 0 &&
+      (panelScaled_.getWidth() != pw || panelScaled_.getHeight() != ph))
+    panelScaled_ = panelArt_.rescaled(pw, ph, juce::Graphics::highResamplingQuality);
+
+  oled_.setBounds(juce::Rectangle<float>(pb.getX() + L.oled.getX() * s,
+                                         pb.getY() + L.oled.getY() * s,
+                                         L.oled.getWidth() * s,
+                                         L.oled.getHeight() * s)
                       .getSmallestIntegerContainer());
 
-  encL_->setBounds(place(L.encL, L.encRadius));
-  encR_->setBounds(place(L.encR, L.encRadius));
+  encL_->setBounds(placeMm(L.encL, L.encRadius));
+  encR_->setBounds(placeMm(L.encR, L.encRadius));
 
   const juce::Point<float> btnPos[5] = {L.btnA, L.btnB, L.btnX, L.btnY, L.btnZ};
-  for (int i = 0; i < 5; ++i) buttons_[i]->setBounds(place(btnPos[i], L.btnRadius));
+  for (int i = 0; i < 5; ++i)
+    buttons_[i]->setBounds(placeMm(btnPos[i], L.btnRadius));
 
-  for (int i = 0; i < jacks_.size(); ++i) {
-    const int row = i / 4, col = i % 4;
-    jacks_[i]->setBounds(place({L.jackLeftX + (float)col * L.jackColPitch,
-                                L.jackTopY + (float)row * L.jackRowPitch},
-                               L.jackRadius));
-  }
+  // active jacks: 5 columns x 4 rows, column-major (matches constructor)
+  const float cols[5] = {L.colTrig, L.colCvIn14, L.colCvIn58, L.colCvOutAD,
+                         L.colCvOutEH};
+  int ji = 0;
+  for (int col = 0; col < 5; ++col)
+    for (int row = 0; row < 4; ++row)
+      jacks_[ji++]->setBounds(placeMm({cols[col], L.jackRowY[row]}, L.jackRadius));
+  // passive: AUDIO IN L/R, OUT L/R then MIDI IN/OUT
+  for (int row = 0; row < 4; ++row)
+    jacks_[ji++]->setBounds(placeMm({L.colAudio, L.jackRowY[row]}, L.jackRadius));
+  jacks_[ji++]->setBounds(placeMm(L.midiIn, L.jackRadius));
+  jacks_[ji++]->setBounds(placeMm(L.midiOut, L.jackRadius));
 
   const int rw = juce::jmin(440, getWidth() - 30);
   routing_.setBounds(getWidth() - rw, 0, rw, getHeight());
-  ioButton_.setBounds(getWidth() - 56, 6, 48, 22);
+  ioButton_.setBounds(getWidth() - 54, getHeight() - 23, 46, 19);
 }
 
 void PanelComponent::paint(juce::Graphics& g) {
   g.fillAll(juce::Colour(kWindowBg));
   const auto pb = panelBounds();
-  const auto& L = layout_;
 
-  // anodized panel
-  juce::ColourGradient grad(juce::Colour(kPanelTop), pb.getX(), pb.getY(),
-                            juce::Colour(kPanelBottom), pb.getX(), pb.getBottom(),
-                            false);
-  g.setGradientFill(grad);
-  g.fillRoundedRectangle(pb, 6.0f);
-  g.setColour(juce::Colour(kPanelEdge));
-  g.drawRoundedRectangle(pb, 6.0f, 1.2f);
-
-  // mounting screws
-  const float sr = pb.getWidth() * 0.014f;
-  const juce::Point<float> screws[4] = {
-      {pb.getX() + sr * 3.0f, pb.getY() + sr * 3.0f},
-      {pb.getRight() - sr * 3.0f, pb.getY() + sr * 3.0f},
-      {pb.getX() + sr * 3.0f, pb.getBottom() - sr * 3.0f},
-      {pb.getRight() - sr * 3.0f, pb.getBottom() - sr * 3.0f}};
-  for (const auto& s : screws) {
-    g.setColour(juce::Colour(0xff41474f));
-    g.fillEllipse(s.x - sr, s.y - sr, sr * 2.0f, sr * 2.0f);
-    g.setColour(juce::Colour(0xff14161a));
-    g.drawLine(s.x - sr * 0.6f, s.y, s.x + sr * 0.6f, s.y, 1.4f);
+  if (panelScaled_.isValid()) {
+    // real panel artwork, pre-scaled 1:1 onto the panel rect
+    g.setOpacity(1.0f);
+    g.drawImageAt(panelScaled_, juce::roundToInt(pb.getX()),
+                  juce::roundToInt(pb.getY()));
+    g.setColour(juce::Colours::black.withAlpha(0.5f));
+    g.drawRect(pb.expanded(1.0f), 1.0f);
+  } else {
+    g.setColour(juce::Colours::white);
+    g.fillRect(pb);
   }
 
-  // branding
-  const float by = pb.getY() + L.brandingY * pb.getHeight();
-  g.setColour(juce::Colour(kSilk));
-  g.setFont(juce::Font(juce::FontOptions(pb.getWidth() * 0.030f)));
-  g.drawText("CALSYNTH", (int)pb.getX(), (int)(by - 10.0f),
-             (int)(pb.getWidth() * 0.5f), 20, juce::Justification::centred);
-  g.setFont(juce::Font(juce::FontOptions(pb.getWidth() * 0.040f, juce::Font::bold)));
-  g.drawText("XLOC2", (int)(pb.getX() + pb.getWidth() * 0.5f), (int)(by - 11.0f),
-             (int)(pb.getWidth() * 0.5f), 22, juce::Justification::centred);
-
-  // silk labels
-  auto label = [&](juce::Point<float> centre, float belowFrac,
-                   const juce::String& text, float size) {
-    g.setFont(juce::Font(juce::FontOptions(size)));
-    const float x = pb.getX() + centre.x * pb.getWidth();
-    const float y = pb.getY() + centre.y * pb.getHeight() +
-                    belowFrac * pb.getWidth();
-    g.drawText(text, (int)(x - 40.0f), (int)y, 80, 14,
-               juce::Justification::centred);
-  };
-  g.setColour(juce::Colour(kSilk));
-  const float small = pb.getWidth() * 0.026f;
-  label(L.btnA, L.btnRadius + 0.006f, "A", small);
-  label(L.btnB, L.btnRadius + 0.006f, "B", small);
-  label(L.btnX, L.btnRadius + 0.006f, "X", small);
-  label(L.btnY, L.btnRadius + 0.006f, "Y", small);
-  label(L.btnZ, L.btnRadius + 0.006f, "Z", small);
-
-  static const char* jackNames[20] = {
-      "TR1", "TR2", "TR3", "TR4", "CV1", "CV2", "CV3", "CV4",
-      "CV5", "CV6", "CV7", "CV8", "A",   "B",   "C",   "D",
-      "E",   "F",   "G",   "H"};
-  g.setColour(juce::Colour(kSilk).withAlpha(0.85f));
-  for (int i = 0; i < 20; ++i) {
-    const int row = i / 4, col = i % 4;
-    label({L.jackLeftX + (float)col * L.jackColPitch,
-           L.jackTopY + (float)row * L.jackRowPitch},
-          L.jackRadius - 0.004f, jackNames[i], small);
-  }
-
-  // clock-source status
+  // status line lives in the reserved bottom margin, never over the art
   if (!lastAudioActive_) {
     g.setColour(juce::Colour(0xff8a93a1));
     g.setFont(juce::Font(juce::FontOptions(12.0f)));
-    g.drawText("no audio device - internal 1 kHz clock", 0,
-               getHeight() - 20, getWidth(), 16, juce::Justification::centred);
+    g.drawText("no audio device - internal 1 kHz clock", 0, getHeight() - 22,
+               getWidth(), 16, juce::Justification::centred);
   }
 }
 
