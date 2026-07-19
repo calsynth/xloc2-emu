@@ -23,25 +23,62 @@ jobs:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DXLOC2_BUILD_APP=OFF
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+          -DXLOC2_BUILD_APP=OFF
       - name: Build (core module + headless)
         run: cmake --build build -j4 --target headless
       - name: Run headless tests (dlopen path)
         run: ./build/headless
 
+  # The firmware core must build with GCC (Teensy toolchain parity; clang
+  # rejects several firmware idioms), but the JUCE app needs AppleClang for
+  # its ObjC++. Hence a two-pass build: Homebrew GCC for the core, then the
+  # default toolchain for the app with the pre-built core bundled in.
   build-macos:
     name: macOS app (Apple Silicon)
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - name: Configure
-        run: >
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_OSX_ARCHITECTURES=arm64
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
-      - name: Build (app + bundled phz_core.dylib)
-        run: cmake --build build -j4 --target xloc2
+      - name: Find or install GCC
+        run: |
+          brew install gcc@14 || brew install gcc || true
+          GXX="$(command -v g++-14 || true)"
+          if [ -z "$GXX" ]; then
+            GXX="$(ls /opt/homebrew/bin/g++-* /usr/local/bin/g++-* 2>/dev/null | sort -V | tail -1 || true)"
+          fi
+          [ -n "$GXX" ] || { echo "no Homebrew g++-NN found"; exit 1; }
+          GCC="$(echo "$GXX" | sed 's/g++/gcc/')"
+          command -v "$GCC" >/dev/null || GCC="$GXX"
+          echo "Using $GXX / $GCC"
+          echo "GXX=$GXX" >> "$GITHUB_ENV"
+          echo "GCC=$GCC" >> "$GITHUB_ENV"
+      - name: "Pass 1: core module with GCC"
+        # No CMAKE_OSX_ARCHITECTURES here: GCC does not accept -arch; the
+        # arm64 runner's GCC targets arm64 natively.
+        run: |
+          cmake -S . -B build-core-ci -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$GCC" -DCMAKE_CXX_COMPILER="$GXX" \
+            -DXLOC2_BUILD_APP=OFF
+          cmake --build build-core-ci -j4 --target phz_core
+      - name: Verify core dylib portability (no Homebrew runtime deps)
+        run: |
+          otool -L build-core-ci/phz_core.dylib
+          if otool -L build-core-ci/phz_core.dylib | grep -E "/opt/homebrew|/usr/local"; then
+            echo "ERROR: phz_core.dylib depends on Homebrew libraries" >&2
+            exit 1
+          fi
+          lipo -info build-core-ci/phz_core.dylib
+      - name: "Pass 2: app with AppleClang + bundled prebuilt core"
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DXLOC2_BUILD_CORE=OFF \
+            -DXLOC2_PREBUILT_CORE="$PWD/build-core-ci/phz_core.dylib"
+          cmake --build build -j4 --target xloc2
       - name: Verify the core is bundled
         run: test -f build/app/xloc2_artefacts/Release/XLOC2.app/Contents/Resources/phz_core.dylib
       - name: Package
@@ -64,13 +101,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
+      - name: Find or install GCC
+        run: brew install gcc@14 || brew install gcc || true
       - name: Build core
+        # build-core.sh auto-detects Homebrew g++-NN on Darwin (the core is
+        # GCC-only) and links libstdc++/libgcc statically via CMake.
         run: >
           ./scripts/build-core.sh
           --repo "${{ inputs.core_repo }}"
           --ref "${{ inputs.core_ref }}"
           --out dist-core
-          -- -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          -- -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+      - name: Verify core dylib portability
+        run: |
+          otool -L dist-core/*.dylib
+          if otool -L dist-core/*.dylib | grep -E "/opt/homebrew|/usr/local"; then
+            echo "ERROR: core dylib depends on Homebrew libraries" >&2
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: phz_core-${{ inputs.core_ref }}-macos-arm64

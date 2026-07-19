@@ -1,4 +1,3 @@
-build/
+build*/
 state/
 *.pbm
-build-core/
