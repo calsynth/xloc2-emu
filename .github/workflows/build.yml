@@ -1,0 +1,48 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-linux:
+    name: Headless firmware tests (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Fetch teensy-x86-stubs
+        run: git clone --depth 5 https://github.com/newdigate/teensy-x86-stubs $HOME/teensy-x86-stubs
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DXLOC2_BUILD_APP=OFF
+      - name: Build
+        run: cmake --build build -j4 --target headless
+      - name: Run headless tests
+        run: ./build/headless
+
+  build-macos:
+    name: macOS app (Apple Silicon)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Fetch teensy-x86-stubs
+        run: git clone --depth 5 https://github.com/newdigate/teensy-x86-stubs $HOME/teensy-x86-stubs
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES=arm64
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+      - name: Build
+        run: cmake --build build -j4 --target xloc2
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp -R build/app/xloc2_artefacts/Release/XLOC2.app dist/
+          cd dist && zip -ry XLOC2-macOS-arm64.zip XLOC2.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XLOC2-macOS-arm64
+          path: dist/XLOC2-macOS-arm64.zip

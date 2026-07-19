@@ -77,3 +77,9 @@ target_link_libraries(headless firmware_core)
 
 add_executable(dbg test/dbg.cpp)
 target_link_libraries(dbg firmware_core)
+
+# desktop app (JUCE) — off for pure headless CI runs
+option(XLOC2_BUILD_APP "Build the JUCE desktop app" ON)
+if(XLOC2_BUILD_APP)
+  add_subdirectory(app)
+endif()
