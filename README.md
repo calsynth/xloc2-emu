@@ -30,9 +30,27 @@ cmake --build build -j8 --target headless   # headless firmware tests
 ./build/headless
 ```
 
-Requirements: CMake ≥ 3.20, a C++17 compiler. macOS: Xcode command-line tools.
+Requirements: CMake ≥ 3.20, **GCC** for the firmware core (Teensy toolchain
+parity — clang rejects several firmware idioms; see `FIRMWARE_PATCHES.md`).
 Linux: ALSA/X11 dev packages (see `.github/workflows/build.yml`). JUCE 8 is fetched
 automatically on first configure.
+
+macOS is a two-pass build (the JUCE app needs AppleClang for ObjC++, the core
+needs GCC — `brew install gcc`):
+
+```sh
+# pass 1: firmware core with Homebrew GCC
+cmake -S . -B build-core -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 -DXLOC2_BUILD_APP=OFF
+cmake --build build-core -j8 --target phz_core
+# pass 2: app with AppleClang, bundling the pre-built core
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DXLOC2_BUILD_CORE=OFF -DXLOC2_PREBUILT_CORE=$PWD/build-core/phz_core.dylib
+cmake --build build -j8 --target xloc2
+```
+
+`scripts/build-core.sh` builds a hot-loadable core (`phz_core-<ref>.so/.dylib`)
+from any Phazerville repo/ref with the right compiler automatically.
 
 ## GitHub / CI
 

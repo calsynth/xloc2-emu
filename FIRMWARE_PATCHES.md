@@ -7,6 +7,17 @@
 > loadable core module (`phz_core-<ref>.so/.dylib`) the app can hot-load
 > from its FW panel — no app rebuild needed. The vendored `firmware/` tree
 > (upstream v2.0.1 + these edits) remains the default build source.
+>
+> **The core builds with GCC only** (parity with the Teensy
+> arm-none-eabi-gcc toolchain; clang hard-errors on several firmware idioms
+> — const-correctness shortcuts needing `-fpermissive`, out-of-range
+> constexpr arithmetic, etc. — and patching upstream for clang would grow
+> this file forever). The JUCE app builds with the platform default
+> compiler; on macOS that means a two-pass build: Homebrew `g++-NN` for
+> `phz_core.dylib` (linked `-static-libstdc++ -static-libgcc` so it has no
+> Homebrew runtime deps), then AppleClang for the app with
+> `-DXLOC2_BUILD_CORE=OFF -DXLOC2_PREBUILT_CORE=<dylib>`. CI does this
+> automatically; `scripts/build-core.sh` picks the right compiler itself.
 
 The goal is to run the *unmodified* Phazerville firmware; everything possible
 is handled in `shim/` and `core/`. The following minimal edits to files under

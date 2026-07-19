@@ -5,6 +5,27 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# ---------------------------------------------------------------------------
+# Build selection.
+#
+# The firmware core ALWAYS builds with GCC, on every platform — it matches
+# the Teensy (arm-none-eabi-gcc) toolchain the firmware is written for;
+# clang hard-errors on several firmware idioms and patching upstream for
+# clang would grow the patch set forever. The JUCE app builds with the
+# platform default compiler (AppleClang on macOS — required for ObjC++).
+# On macOS this means a two-pass build:
+#   pass 1 (Homebrew g++-NN):  -DXLOC2_BUILD_APP=OFF            -> phz_core
+#   pass 2 (AppleClang):       -DXLOC2_BUILD_CORE=OFF
+#                              -DXLOC2_PREBUILT_CORE=<dylib>    -> app
+# (scripts/build-core.sh and CI do this automatically.)
+# ---------------------------------------------------------------------------
+option(XLOC2_BUILD_CORE "Build the firmware core module (requires GCC)" ON)
+option(XLOC2_BUILD_APP "Build the JUCE desktop app" ON)
+# Pre-built core module to bundle with the app when the core targets are
+# not built in this tree (macOS two-pass build).
+set(XLOC2_PREBUILT_CORE "" CACHE FILEPATH
+    "Path to a pre-built phz_core module to bundle with the app")
+
 # Firmware source root (must contain software/src). Overridable so
 # scripts/build-core.sh can build a core module from any Phazerville
 # checkout (upstream release, fork, branch) with patches/ applied.
@@ -14,6 +35,20 @@ set(XLOC2_FW_DIR "${CMAKE_SOURCE_DIR}/firmware" CACHE PATH
 set(XLOC2_CORE_NAME "phz_core" CACHE STRING "Core module output name")
 # Optional git ref / label baked into the core's build_info string.
 set(XLOC2_CORE_REF "" CACHE STRING "Git ref/label for the core build_info")
+
+if(XLOC2_BUILD_CORE)
+
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  message(FATAL_ERROR
+    "The firmware core must be built with GCC (matches the Teensy "
+    "toolchain; clang rejects several firmware idioms). Current compiler: "
+    "${CMAKE_CXX_COMPILER_ID}.\n"
+    "On macOS:  brew install gcc && cmake -DCMAKE_C_COMPILER=gcc-14 "
+    "-DCMAKE_CXX_COMPILER=g++-14 -DXLOC2_BUILD_APP=OFF ...\n"
+    "(then build the app in a second tree with the default compiler and "
+    "-DXLOC2_BUILD_CORE=OFF -DXLOC2_PREBUILT_CORE=<path to phz_core>; "
+    "scripts/build-core.sh does the core pass for you.)")
+endif()
 
 set(FW ${XLOC2_FW_DIR}/software/src)
 set(STUBS ${CMAKE_SOURCE_DIR}/third_party/teensy-x86-stubs/src)
@@ -84,16 +119,19 @@ target_compile_definitions(firmware_core PUBLIC
   OC_VERSION_EXTRA="_XLOC2emu"
 )
 
+# GCC-only flags (the core is GCC-only — enforced above — but keep them
+# conditional so a stray non-GNU configure stops at the FATAL_ERROR, not at
+# an unknown-flag error):
+#   -fpermissive/-fmax-errors: Arduino/Teensy toolchain parity (the firmware
+#   relies on -fpermissive const-correctness shortcuts)
+#   -fno-gnu-unique: ELF-only (meaningless on Mach-O); STB_GNU_UNIQUE symbols
+#   would mark the core module NODELETE, breaking true dlclose-unload on hot
+#   reload. Each loaded core instance is deliberately isolated (RTLD_LOCAL).
 target_compile_options(firmware_core PRIVATE
   -Wall -Wno-unused-variable -Wno-unused-function -fno-exceptions
-  # the Arduino/Teensy toolchain builds with -fpermissive; the firmware
-  # relies on it (const-correctness shortcuts etc.)
-  -fpermissive -Wno-write-strings
-  -fmax-errors=20
-  # No STB_GNU_UNIQUE symbols: they would mark the core module NODELETE,
-  # breaking true dlclose-unload on hot reload. Each loaded core instance is
-  # deliberately fully isolated (RTLD_LOCAL), so uniqueness is unwanted.
-  $<$<CXX_COMPILER_ID:GNU>:-fno-gnu-unique>
+  -Wno-write-strings
+  $<$<CXX_COMPILER_ID:GNU>:-fpermissive -fmax-errors=20>
+  $<$<AND:$<CXX_COMPILER_ID:GNU>,$<NOT:$<PLATFORM_ID:Darwin>>>:-fno-gnu-unique>
 )
 
 # ---------------------------------------------------------------------------
@@ -110,7 +148,13 @@ set_target_properties(phz_core PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 target_compile_options(phz_core PRIVATE
-  $<$<CXX_COMPILER_ID:GNU>:-fno-gnu-unique>)
+  $<$<AND:$<CXX_COMPILER_ID:GNU>,$<NOT:$<PLATFORM_ID:Darwin>>>:-fno-gnu-unique>)
+if(APPLE)
+  # Homebrew GCC builds the core, but end users don't have Homebrew's
+  # libstdc++/libgcc — link them statically so the dylib is self-contained.
+  # CI verifies with `otool -L`: no /opt/homebrew or /usr/local paths.
+  target_link_options(phz_core PRIVATE -static-libstdc++ -static-libgcc)
+endif()
 if(XLOC2_CORE_REF)
   target_compile_definitions(phz_core PRIVATE
     XLOC2_CORE_GIT_REF="${XLOC2_CORE_REF}")
@@ -129,8 +173,9 @@ add_dependencies(headless phz_core)
 add_executable(dbg test/dbg.cpp)
 target_link_libraries(dbg firmware_core)
 
+endif()  # XLOC2_BUILD_CORE
+
 # desktop app (JUCE) — off for pure headless CI runs
-option(XLOC2_BUILD_APP "Build the JUCE desktop app" ON)
 if(XLOC2_BUILD_APP)
   add_subdirectory(app)
 endif()
