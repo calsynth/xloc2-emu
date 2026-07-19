@@ -27,6 +27,10 @@ class TestBenchPanel : public juce::Component, private juce::Timer {
   void paint(juce::Graphics& g) override;
   void resized() override;
 
+  // Exact natural content height at the standard sidebar width. The panel
+  // column is scaled to match this, so the sidebar never needs a scrollbar.
+  int preferredHeight() const;
+
  private:
   class ScopeDisplay;
   class CvGenRow;
@@ -45,8 +49,7 @@ class TestBenchPanel : public juce::Component, private juce::Timer {
   EmuEngine& engine_;
   bool updating_ = false;
 
-  juce::Viewport viewport_;
-  juce::Component content_;
+  juce::Component content_;  // all children live here (fits exactly)
 
   juce::Label scopeTitle_, cvTitle_, trigTitle_, wavTitle_;
   juce::ComboBox scopeSource_, scopeWindow_;

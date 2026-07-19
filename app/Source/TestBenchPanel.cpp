@@ -781,10 +781,7 @@ TestBenchPanel::TestBenchPanel(EmuEngine& engine) : engine_(engine) {
   };
   content_.addAndMakeVisible(monitorDevice_);
 
-  viewport_.setViewedComponent(&content_, false);
-  viewport_.setScrollBarsShown(true, false);
-  viewport_.setScrollBarThickness(8);
-  addAndMakeVisible(viewport_);
+  addAndMakeVisible(content_);
 
   loadFromConfig(engine_.getTestBench());
 
@@ -944,25 +941,32 @@ void TestBenchPanel::paint(juce::Graphics& g) {
   g.fillRect(0, 0, 1, getHeight());
 }
 
+// Section metrics shared by preferredHeight() and layoutContent().
+namespace {
+constexpr int kScopeH = 340;              // ~1.5x the original display height
+constexpr int kCvRowH = 52, kCvGap = 6;   // two-line rows + inter-row gap
+constexpr int kTrigRowH = 28, kTrigGap = 4;
+}  // namespace
+
+int TestBenchPanel::preferredHeight() const {
+  int total = 10 + 18 + 28 + 6 + kScopeH + 16;              // scope section
+  total += 24 + 8 * (kCvRowH + kCvGap) + 12;                // cv generators
+  total += 22 + 4 * (kTrigRowH + kTrigGap) + 12;            // trig generators
+  total += 22 + 28 + 28 + 26 + 4 + 26 + 10;                 // wav player
+  return total;
+}
+
 void TestBenchPanel::resized() {
-  viewport_.setBounds(getLocalBounds());
   layoutContent();
 }
 
-// Lay the sections out top-to-bottom inside the scrollable content with
-// generous breathing room; the content grows past the viewport if needed.
+// Lay the sections out top-to-bottom. The sidebar is always given its
+// natural height (the panel column scales to match), so nothing scrolls.
 void TestBenchPanel::layoutContent() {
-  const int w = juce::jmax(280, getWidth() - viewport_.getScrollBarThickness());
-
-  // measure required height first
-  const int scopeH = 340;               // ~1.5x the previous display height
-  const int cvRowH = 52, cvGap = 6;     // two-line rows + inter-row gap
-  const int trigRowH = 28, trigGap = 4;
-  int total = 10 + 18 + 28 + 6 + scopeH + 16;             // scope section
-  total += 24 + 8 * (cvRowH + cvGap) + 12;                // cv generators
-  total += 22 + 4 * (trigRowH + trigGap) + 12;            // trig generators
-  total += 22 + 28 + 28 + 26 + 4 + 26 + 10;               // wav player
-  content_.setSize(w, total);
+  const int scopeH = kScopeH;
+  const int cvRowH = kCvRowH, cvGap = kCvGap;
+  const int trigRowH = kTrigRowH, trigGap = kTrigGap;
+  content_.setBounds(0, 0, juce::jmax(280, getWidth()), preferredHeight());
 
   auto r = content_.getLocalBounds().reduced(12, 10);
 

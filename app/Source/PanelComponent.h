@@ -70,14 +70,25 @@ class PanelComponent : public juce::Component, private juce::Timer {
   bool keyStateChanged(bool isKeyDown) override;
   void parentHierarchyChanged() override;
 
+  // Natural (and minimum) content size: both columns at full height with
+  // outer margins, the panel <-> sidebar gutter, and the bottom strip.
+  int naturalWidth() const;
+  int naturalHeight() const;
+
  private:
   class Encoder;
   class PanelButton;
   class Jack;
 
+  // fixed layout metrics (px)
+  static constexpr int kOuterMargin = 26;  // left/right/top breathing room
+  static constexpr int kGap = 48;          // panel <-> sidebar gutter
+  static constexpr int kBenchW = 460;      // sidebar width
+  static constexpr int kBottomPad = 12;    // column bottom -> strip
+  static constexpr int kStripH = 34;       // bottom status/chip strip
+
   void timerCallback() override;
   void openRouting(JackId focus);
-  int benchWidth() const;  // current test-bench sidebar width (0 = collapsed)
   juce::Rectangle<float> panelBounds() const;
   // mm-centre + mm half-size -> pixel bounds on the fitted panel rect
   juce::Rectangle<int> placeMm(juce::Point<float> centreMm, float radiusMm) const;

@@ -46,10 +46,14 @@ class XLOC2Application : public juce::JUCEApplication {
         : DocumentWindow(name, juce::Colour(0xff17181b),
                          DocumentWindow::allButtons) {
       setUsingNativeTitleBar(true);
-      setContentOwned(new PanelComponent(engine), true);
+      auto* panel = new PanelComponent(engine);
+      setContentOwned(panel, true);
       setResizable(true, true);
-      setResizeLimits(480, 630, 4096, 4096);
-      centreWithSize(1140, 1000);
+      // natural two-column layout size is also the minimum: shrinking can
+      // never introduce a scrollbar or overlap
+      setResizeLimits(panel->naturalWidth(), panel->naturalHeight(), 4096,
+                      4096);
+      centreWithSize(panel->naturalWidth(), panel->naturalHeight());
       setVisible(true);
     }
 

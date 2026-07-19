@@ -381,7 +381,7 @@ PanelComponent::PanelComponent(EmuEngine& engine)
             {juce::KeyPress::escapeKey, 0, emu::ENC_L_PUSH, false}}};
 
   setWantsKeyboardFocus(true);
-  setSize(1140, 1000);
+  setSize(naturalWidth(), naturalHeight());
   startTimerHz(30);
 }
 
@@ -412,27 +412,30 @@ void PanelComponent::openRouting(JackId focus) {
   if (focus != JackId::None) routing_.focusJack(focus);
 }
 
-int PanelComponent::benchWidth() const {
-  if (!benchVisible_) return 0;
-  // fixed ~400 px, but never squeeze the panel below usability
-  return juce::jmin(460, juce::jmax(300, getWidth() - 420));
+// The column height is driven by the sidebar's natural (scroll-free) content
+// height; the panel scales so both columns are exactly equal height.
+int PanelComponent::naturalWidth() const {
+  const int colH = bench_.preferredHeight();
+  const int panelW = juce::roundToInt((float)colH * PanelLayout::aspect);
+  return 2 * kOuterMargin + panelW + kGap + kBenchW;
+}
+
+int PanelComponent::naturalHeight() const {
+  return kOuterMargin + bench_.preferredHeight() + kBottomPad + kStripH;
 }
 
 juce::Rectangle<float> PanelComponent::panelBounds() const {
-  // panel replica lives left of the test-bench sidebar; reserve a status
-  // strip at the bottom and small margins elsewhere
-  auto area = getLocalBounds().toFloat();
-  area.removeFromRight((float)benchWidth());
-  if (benchVisible_) area.removeFromRight(24.0f);  // gap panel <-> sidebar
-  area.removeFromBottom(26.0f);
-  area = area.reduced(6.0f);
-  float h = area.getHeight();
-  float w = h * PanelLayout::aspect;
-  if (w > area.getWidth()) {
-    w = area.getWidth();
-    h = w / PanelLayout::aspect;
-  }
-  return {area.getCentreX() - w * 0.5f, area.getCentreY() - h * 0.5f, w, h};
+  // Both columns keep their natural size; extra window space becomes
+  // symmetric margin so the two-column group stays centred and neat.
+  const float ph = (float)bench_.preferredHeight();
+  const float pw = (float)juce::roundToInt(ph * PanelLayout::aspect);
+  const float groupW =
+      pw + (benchVisible_ ? (float)(kGap + kBenchW) : 0.0f);
+  const float x = juce::jmax((float)kOuterMargin,
+                             ((float)getWidth() - groupW) * 0.5f);
+  const float extraY =
+      juce::jmax(0.0f, (float)(getHeight() - naturalHeight()));
+  return {x, (float)kOuterMargin + extraY * 0.5f, pw, ph};
 }
 
 juce::Rectangle<int> PanelComponent::placeMm(juce::Point<float> centreMm,
@@ -498,15 +501,20 @@ void PanelComponent::resized() {
   jacks_[ji++]->setBounds(placeMm(L.midiIn, L.jackRadius));
   jacks_[ji++]->setBounds(placeMm(L.midiOut, L.jackRadius));
 
-  const int bw = benchWidth();
-  bench_.setBounds(getWidth() - bw, juce::roundToInt(pb.getY()), bw,
+  // sidebar: same y and height as the panel, across the gutter
+  bench_.setBounds(juce::roundToInt(pb.getRight()) + kGap,
+                   juce::roundToInt(pb.getY()), kBenchW,
                    juce::roundToInt(pb.getHeight()));
 
-  const int leftW = getWidth() - bw;
   const int rw = juce::jmin(440, getWidth() - 30);
   routing_.setBounds(getWidth() - rw, 0, rw, getHeight());
-  ioButton_.setBounds(leftW - 54, getHeight() - 23, 46, 19);
-  benchButton_.setBounds(leftW - 110, getHeight() - 23, 52, 19);
+
+  // TEST / I/O chips centred in the bottom strip
+  const int chipW = 70, chipH = 26, chipGap = 10;
+  const int chipY = getHeight() - kStripH + (kStripH - chipH) / 2;
+  const int chipX = (getWidth() - (2 * chipW + chipGap)) / 2;
+  benchButton_.setBounds(chipX, chipY, chipW, chipH);
+  ioButton_.setBounds(chipX + chipW + chipGap, chipY, chipW, chipH);
 }
 
 void PanelComponent::paint(juce::Graphics& g) {
@@ -525,13 +533,13 @@ void PanelComponent::paint(juce::Graphics& g) {
     g.fillRect(pb);
   }
 
-  // status line lives in the reserved bottom margin, never over the art
+  // status line lives in the left corner of the bottom strip
   if (!lastAudioActive_) {
     g.setColour(juce::Colour(0xff8a93a1));
     g.setFont(juce::Font(juce::FontOptions(12.0f)));
-    g.drawText("no audio device - internal 1 kHz clock", 6, getHeight() - 22,
-               juce::jmax(60, getWidth() - benchWidth() - 130), 16,
-               juce::Justification::centredLeft);
+    g.drawText("no audio device - internal 1 kHz clock", 12,
+               getHeight() - kStripH, juce::jmax(60, getWidth() / 2 - 100),
+               kStripH, juce::Justification::centredLeft);
   }
 }
 
