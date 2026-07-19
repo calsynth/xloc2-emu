@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <EEPROM.h>
 
+#include <cerrno>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -29,6 +30,14 @@ __attribute__((constructor(101))) static void map_fake_peripherals() {
   for (const auto& r : regions) {
     void* p = mmap((void*)r.base, r.size, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (p == MAP_FAILED && errno == EEXIST) {
+      // Hot reload: a previously loaded core instance already mapped this
+      // region (the mapping outlives dlclose). Replace it with a fresh
+      // zero-filled one — the retired core is stopped before a new one is
+      // loaded, and a freshly booting core expects reset registers anyway.
+      p = mmap((void*)r.base, r.size, PROT_READ | PROT_WRITE,
+               MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    }
     if (p != (void*)r.base) {
       fprintf(stderr,
               "emu: FATAL: cannot map fake peripheral region at %p (got %p)\n",
