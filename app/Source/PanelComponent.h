@@ -24,6 +24,7 @@
 #include "EmuEngine.h"
 #include "OledComponent.h"
 #include "RoutingPanel.h"
+#include "TestBenchPanel.h"
 
 // All panel geometry in one place, in millimetres from the panel top-left.
 // Values supplied by Calsynth to match the production panel artwork.
@@ -76,6 +77,7 @@ class PanelComponent : public juce::Component, private juce::Timer {
 
   void timerCallback() override;
   void openRouting(JackId focus);
+  int benchWidth() const;  // current test-bench sidebar width (0 = collapsed)
   juce::Rectangle<float> panelBounds() const;
   // mm-centre + mm half-size -> pixel bounds on the fitted panel rect
   juce::Rectangle<int> placeMm(juce::Point<float> centreMm, float radiusMm) const;
@@ -91,7 +93,10 @@ class PanelComponent : public juce::Component, private juce::Timer {
   juce::OwnedArray<PanelButton> buttons_;
   juce::OwnedArray<Jack> jacks_;
   RoutingPanel routing_;
+  TestBenchPanel bench_;
+  bool benchVisible_ = true;
   juce::TextButton ioButton_{"I/O"};
+  juce::TextButton benchButton_{"TEST"};
   juce::TooltipWindow tooltips_{this};
 
   // keyboard state tracking (press AND release for held buttons)

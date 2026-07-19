@@ -4,6 +4,7 @@
 #include "EmuEngine.h"
 #include "PanelComponent.h"
 #include "RoutingPanel.h"
+#include "TestBenchPanel.h"
 
 class XLOC2Application : public juce::JUCEApplication {
  public:
@@ -19,6 +20,10 @@ class XLOC2Application : public juce::JUCEApplication {
     juce::String audioXml;
     if (xloc2::loadRoutingState(cfg, audioXml)) engine_->setRouting(cfg);
     const auto savedAudioState = juce::parseXML(audioXml);  // may be null
+
+    // restore test-bench generators + scope settings (same JSON file)
+    TestBenchConfig bench;
+    if (xloc2::loadTestBench(bench)) engine_->setTestBench(bench);
 
     engine_->start(savedAudioState.get());
     mainWindow_ = std::make_unique<MainWindow>(getApplicationName(), *engine_);
@@ -43,8 +48,8 @@ class XLOC2Application : public juce::JUCEApplication {
       setUsingNativeTitleBar(true);
       setContentOwned(new PanelComponent(engine), true);
       setResizable(true, true);
-      setResizeLimits(400, 630, 4096, 4096);
-      centreWithSize(650, 1000);
+      setResizeLimits(480, 630, 4096, 4096);
+      centreWithSize(1080, 1000);
       setVisible(true);
     }
 

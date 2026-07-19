@@ -27,6 +27,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <vector>
 
 // Jack identifiers for routing.
 enum class JackId : int {
@@ -54,6 +55,41 @@ struct RoutingConfig {
   std::array<JackRouting, 4> trigIn;   // device input channel -> trigger in
   float trigRiseVolts = 1.6f;          // comparator with hysteresis
   float trigFallVolts = 0.8f;
+};
+
+// ---- built-in test bench (signal generators + scope) ----
+enum class GenWave : int {
+  Sine = 0, Triangle, SawUp, SawDown, Square,
+  SHRandom, SmoothRandom, WhiteNoise, DC
+};
+
+struct CvGenConfig {
+  bool enabled = false;
+  int dest = -1;          // 0..7 = CV In 1..8, -1 = none
+  int wave = 0;           // GenWave
+  float freqHz = 1.0f;    // 0.01 .. 5000 (ignored for DC)
+  float minVolts = -5.0f;
+  float maxVolts = 5.0f;  // DC level = maxVolts
+};
+
+struct TrigGenConfig {
+  bool enabled = false;
+  int dest = -1;          // 0..3 = TR 1..4, -1 = none
+  float rateHz = 2.0f;    // 0.05 .. 100
+  float pulseMs = 10.0f;  // 1 .. 100
+};
+
+// Scope source indexing: 0..7 = CV In 1..8, 8..15 = CV Out A..H,
+// 16..19 = TR 1..4.
+struct TestBenchConfig {
+  std::array<CvGenConfig, 8> cv;
+  std::array<TrigGenConfig, 4> trig;
+  // Scope settings ride along so they persist with the generators; the
+  // engine only uses scopeSource, the rest is UI state.
+  int scopeSource = 8;    // CV Out A
+  int scopeWindow = 3;    // index into the UI's time-window list
+  bool scopeAutoZoom = false;
+  bool scopeSync = true;
 };
 
 class EmuEngine : public juce::AudioIODeviceCallback {
@@ -86,6 +122,26 @@ class EmuEngine : public juce::AudioIODeviceCallback {
   RoutingConfig getRouting() const;
   void setRouting(const RoutingConfig& r);
 
+  // ---- test bench (message thread; applied atomically per block) ----
+  TestBenchConfig getTestBench() const;
+  void setTestBench(const TestBenchConfig& b);
+  void postTrigFire(int genRow);  // manual single pulse (ignores enable)
+  void postGenSync();             // phase-reset all generators
+
+  // True when a generator currently overrides that jack's routed input.
+  bool genDrivesCvIn(int ch) const {
+    return ((genCvMask_.load(std::memory_order_relaxed) >> ch) & 1u) != 0;
+  }
+  bool genDrivesTrig(int ch) const {
+    return ((genTrigMask_.load(std::memory_order_relaxed) >> ch) & 1u) != 0;
+  }
+
+  // ---- scope (message thread) ----
+  // Copies up to maxN most recent capture samples (oldest first) of the
+  // currently selected scope source; returns the count and the capture
+  // period in seconds (device sample period, or 62.5 us in fallback mode).
+  int readScope(float* dest, int maxN, double& dtSeconds) const;
+
   // ---- screen snapshot for UI (message thread) ----
   // Copies latest completed 1024-byte page buffer; returns frame counter.
   uint64_t readScreen(uint8_t* dest1024) const;
@@ -106,9 +162,20 @@ class EmuEngine : public juce::AudioIODeviceCallback {
 
  private:
   struct ControlEvent {
-    enum Type { Button, Encoder } type;
-    int a;  // button id / encoder index (0=L,1=R)
-    int b;  // down / detents
+    enum Type { Button, Encoder, TrigFire, GenSync } type;
+    int a;  // button id / encoder index (0=L,1=R) / trig gen row
+    int b;  // down / detents / pulse length us
+  };
+
+  struct CvGenState {
+    double phase = 0.0;
+    uint32_t rng = 1;
+    float rndA = 0.0f, rndB = 0.0f;  // S&H / smooth-random segment endpoints
+  };
+  struct TrigGenState {
+    double phase = 0.0;
+    double pulseS = 0.0;  // seconds of pulse remaining (>0 = high)
+    bool high = false;
   };
 
   struct FallbackClock : juce::HighResolutionTimer {
@@ -120,6 +187,10 @@ class EmuEngine : public juce::AudioIODeviceCallback {
   void drainControlEvents();
   void publishScreen();
   void fallbackTick();
+  // One generation quantum: evaluate enabled generators and push their
+  // values into the emu (overriding routed inputs). Runs on the emu thread.
+  void applyGenerators(const TestBenchConfig& b, double dt);
+  void captureScope();  // append current source value to the ring
 
   juce::AudioDeviceManager deviceManager_;
   juce::AbstractFifo controlFifo_{256};
@@ -127,6 +198,22 @@ class EmuEngine : public juce::AudioIODeviceCallback {
 
   mutable juce::SpinLock routingLock_;
   RoutingConfig routing_;
+
+  // test bench
+  mutable juce::SpinLock benchLock_;
+  TestBenchConfig bench_;
+  std::array<CvGenState, 8> cvGen_{};
+  std::array<TrigGenState, 4> trigGen_{};
+  std::array<float, 8> cvInNow_{};  // last volts applied per CV-in jack
+  std::atomic<uint32_t> genCvMask_{0}, genTrigMask_{0};
+
+  // scope ring buffer: single writer (emu thread), UI reads at ~30 Hz
+  static constexpr int kScopeSize = 1 << 18;  // 262144 (>5 s @ 48 kHz)
+  static constexpr uint64_t kScopeMask = kScopeSize - 1;
+  std::vector<float> scopeBuf_ = std::vector<float>((size_t)kScopeSize, 0.0f);
+  std::atomic<uint64_t> scopeWrite_{0};
+  std::atomic<int> scopeSource_{8};
+  std::atomic<double> scopeDt_{1.0 / 16000.0};
 
   double usPerSample_ = 1e6 / 48000.0;
   double usAccum_ = 0.0;

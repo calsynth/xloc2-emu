@@ -40,7 +40,16 @@ static void jackArrayFromVar(const juce::var& v, std::array<JackRouting, N>& arr
 }
 
 void saveRoutingState(const RoutingConfig& cfg, juce::AudioDeviceManager& dm) {
-  auto* o = new juce::DynamicObject();
+  // Read-modify-write: the same file also holds the test-bench settings
+  // (saved by TestBenchPanel) — preserve any keys we don't own.
+  auto file = routingFile();
+  juce::var existing = juce::JSON::parse(file.loadFileAsString());
+  juce::DynamicObject* o = existing.getDynamicObject();
+  juce::var root = existing;
+  if (o == nullptr) {
+    o = new juce::DynamicObject();
+    root = juce::var(o);
+  }
   o->setProperty("outFullScaleVolts", cfg.outFullScaleVolts);
   o->setProperty("inFullScaleVolts", cfg.inFullScaleVolts);
   o->setProperty("trigRiseVolts", cfg.trigRiseVolts);
@@ -51,9 +60,8 @@ void saveRoutingState(const RoutingConfig& cfg, juce::AudioDeviceManager& dm) {
   if (auto xml = dm.createStateXml())
     o->setProperty("audioDevice", xml->toString());
 
-  auto file = routingFile();
   file.getParentDirectory().createDirectory();
-  file.replaceWithText(juce::JSON::toString(juce::var(o)));
+  file.replaceWithText(juce::JSON::toString(root));
 }
 
 bool loadRoutingState(RoutingConfig& cfg, juce::String& audioDeviceXml) {

@@ -26,6 +26,7 @@ target_sources(xloc2 PRIVATE
   Source/PanelComponent.cpp
   Source/OledComponent.cpp
   Source/RoutingPanel.cpp
+  Source/TestBenchPanel.cpp
 )
 
 target_compile_definitions(xloc2 PRIVATE

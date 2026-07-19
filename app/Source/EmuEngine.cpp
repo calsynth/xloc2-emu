@@ -1,8 +1,23 @@
 #include "EmuEngine.h"
 
 #include <juce_core/juce_core.h>
+#include <cmath>
 
 #include "../../core/emu.h"
+
+namespace {
+// Deterministic self-contained PRNG (xorshift32), one state per generator.
+inline uint32_t xorshift32(uint32_t& s) {
+  s ^= s << 13;
+  s ^= s >> 17;
+  s ^= s << 5;
+  return s;
+}
+// uniform in [-1, 1)
+inline float frand(uint32_t& s) {
+  return (float)((double)xorshift32(s) / 2147483648.0 - 1.0);
+}
+}  // namespace
 
 EmuEngine::EmuEngine() {
   // Sensible default routing: CV outs 1..8 -> device outs 1..8, device ins
@@ -10,6 +25,11 @@ EmuEngine::EmuEngine() {
   for (int i = 0; i < 8; ++i) {
     routing_.cvOut[(size_t)i].deviceChannel = i;
     routing_.cvIn[(size_t)i].deviceChannel = i;
+  }
+  for (int i = 0; i < 8; ++i) {
+    auto& g = cvGen_[(size_t)i];
+    g.rng = 0x9E3779B9u * (uint32_t)(i + 1) | 1u;  // per-generator seed
+    g.rndB = frand(g.rng);
   }
 }
 
@@ -70,6 +90,135 @@ void EmuEngine::setRouting(const RoutingConfig& r) {
   routing_ = r;
 }
 
+TestBenchConfig EmuEngine::getTestBench() const {
+  juce::SpinLock::ScopedLockType l(benchLock_);
+  return bench_;
+}
+
+void EmuEngine::setTestBench(const TestBenchConfig& b) {
+  {
+    juce::SpinLock::ScopedLockType l(benchLock_);
+    bench_ = b;
+  }
+  scopeSource_.store(b.scopeSource, std::memory_order_relaxed);
+  uint32_t cm = 0, tm = 0;
+  for (const auto& g : b.cv)
+    if (g.enabled && g.dest >= 0 && g.dest < 8) cm |= 1u << g.dest;
+  for (const auto& g : b.trig)
+    if (g.enabled && g.dest >= 0 && g.dest < 4) tm |= 1u << g.dest;
+  genCvMask_.store(cm, std::memory_order_relaxed);
+  genTrigMask_.store(tm, std::memory_order_relaxed);
+}
+
+void EmuEngine::postTrigFire(int genRow) {
+  float ms = 10.0f;
+  {
+    juce::SpinLock::ScopedLockType l(benchLock_);
+    if (genRow >= 0 && genRow < 4) ms = bench_.trig[(size_t)genRow].pulseMs;
+  }
+  const auto scope = controlFifo_.write(1);
+  if (scope.blockSize1 > 0)
+    controlEvents_[(size_t)scope.startIndex1] = {ControlEvent::TrigFire, genRow,
+                                                 (int)(ms * 1000.0f)};
+}
+
+void EmuEngine::postGenSync() {
+  const auto scope = controlFifo_.write(1);
+  if (scope.blockSize1 > 0)
+    controlEvents_[(size_t)scope.startIndex1] = {ControlEvent::GenSync, 0, 0};
+}
+
+int EmuEngine::readScope(float* dest, int maxN, double& dtSeconds) const {
+  dtSeconds = scopeDt_.load(std::memory_order_relaxed);
+  const uint64_t w = scopeWrite_.load(std::memory_order_acquire);
+  const uint64_t avail = std::min<uint64_t>(w, (uint64_t)kScopeSize);
+  const int n = (int)std::min<uint64_t>((uint64_t)juce::jmax(0, maxN), avail);
+  for (int i = 0; i < n; ++i)
+    dest[i] = scopeBuf_[(size_t)((w - (uint64_t)n + (uint64_t)i) & kScopeMask)];
+  return n;
+}
+
+// Runs on the emu thread only. One generation quantum of `dt` seconds.
+void EmuEngine::applyGenerators(const TestBenchConfig& b, double dt) {
+  for (int i = 0; i < 8; ++i) {
+    const auto& g = b.cv[(size_t)i];
+    if (!g.enabled || g.dest < 0 || g.dest > 7) continue;
+    auto& st = cvGen_[(size_t)i];
+    float x;  // normalised -1..1
+    const auto wave = (GenWave)g.wave;
+    if (wave == GenWave::DC) {
+      x = 1.0f;  // maps to maxVolts below
+    } else if (wave == GenWave::WhiteNoise) {
+      x = frand(st.rng);
+    } else {
+      double ph = st.phase + (double)g.freqHz * dt;
+      if (ph >= 1.0) {
+        ph -= std::floor(ph);
+        st.rndA = st.rndB;  // new random segment for S&H / smooth
+        st.rndB = frand(st.rng);
+      }
+      st.phase = ph;
+      const float p = (float)ph;
+      switch (wave) {
+        case GenWave::Sine:
+          x = std::sin(p * juce::MathConstants<float>::twoPi); break;
+        case GenWave::Triangle:
+          x = p < 0.5f ? 4.0f * p - 1.0f : 3.0f - 4.0f * p; break;
+        case GenWave::SawUp:   x = 2.0f * p - 1.0f; break;
+        case GenWave::SawDown: x = 1.0f - 2.0f * p; break;
+        case GenWave::Square:  x = p < 0.5f ? 1.0f : -1.0f; break;
+        case GenWave::SHRandom: x = st.rndB; break;
+        case GenWave::SmoothRandom: {
+          const float c =
+              0.5f - 0.5f * std::cos(p * juce::MathConstants<float>::pi);
+          x = st.rndA + (st.rndB - st.rndA) * c;
+          break;
+        }
+        case GenWave::WhiteNoise:  // handled above the switch
+        case GenWave::DC:
+        default: x = 0.0f; break;
+      }
+    }
+    const float v = g.minVolts + (x + 1.0f) * 0.5f * (g.maxVolts - g.minVolts);
+    emu::set_cv_in(g.dest, v);
+    cvInNow_[(size_t)g.dest] = v;
+    cvInMeter_[(size_t)g.dest].store(v, std::memory_order_relaxed);
+  }
+
+  for (int t = 0; t < 4; ++t) {
+    const auto& g = b.trig[(size_t)t];
+    auto& st = trigGen_[(size_t)t];
+    if (g.enabled && g.dest >= 0) {
+      st.phase += (double)g.rateHz * dt;
+      if (st.phase >= 1.0) {
+        st.phase -= std::floor(st.phase);
+        st.pulseS = (double)g.pulseMs * 1e-3;
+      }
+    }
+    const bool high = st.pulseS > 0.0;  // manual Fire also raises pulseS
+    if (st.pulseS > 0.0) st.pulseS -= dt;
+    if (high != st.high) {
+      st.high = high;
+      if (g.dest >= 0 && g.dest < 4) {
+        trigState_[(size_t)g.dest] = high;
+        trigDisp_[(size_t)g.dest].store(high, std::memory_order_relaxed);
+        emu::set_trigger_in(g.dest, high);
+      }
+    }
+  }
+}
+
+void EmuEngine::captureScope() {
+  const int src = scopeSource_.load(std::memory_order_relaxed);
+  float v = 0.0f;
+  if (src >= 0 && src < 8) v = cvInNow_[(size_t)src];
+  else if (src >= 8 && src < 16) v = emu::get_cv_out(src - 8);
+  else if (src >= 16 && src < 20) v = trigState_[(size_t)(src - 16)] ? 5.0f : 0.0f;
+  const uint64_t w = scopeWrite_.load(std::memory_order_relaxed);
+  scopeBuf_[(size_t)(w & kScopeMask)] = v;
+  scopeWrite_.store(w + 1, std::memory_order_release);
+}
+
 uint64_t EmuEngine::readScreen(uint8_t* dest1024) const {
   juce::SpinLock::ScopedLockType l(screenLock_);
   std::memcpy(dest1024, screenCopy_.data(), 1024);
@@ -83,9 +232,16 @@ void EmuEngine::drainControlEvents() {
       const auto& e = controlEvents_[(size_t)(start + i)];
       if (e.type == ControlEvent::Button) {
         emu::set_button((emu::Button)e.a, e.b != 0);
-      } else {
+      } else if (e.type == ControlEvent::Encoder) {
         if (e.a) emu::turn_encoder_right(e.b);
         else emu::turn_encoder_left(e.b);
+      } else if (e.type == ControlEvent::TrigFire) {
+        if (e.a >= 0 && e.a < 4)
+          trigGen_[(size_t)e.a].pulseS =
+              juce::jmax(trigGen_[(size_t)e.a].pulseS, (double)e.b * 1e-6);
+      } else if (e.type == ControlEvent::GenSync) {
+        for (auto& g : cvGen_) g.phase = 0.0;
+        for (auto& t : trigGen_) t.phase = 0.0;
       }
     }
   };
@@ -103,11 +259,23 @@ void EmuEngine::publishScreen() {
 }
 
 // Fallback clock tick (1 ms of virtual time). Never runs concurrently with
-// the audio callback — see header.
+// the audio callback — see header. The tick is subdivided into 16 quanta of
+// 62.5 us (62/63 us alternating in emu time) so generator waveforms and the
+// scope capture stay meaningful at audio-ish rates without a device.
 void EmuEngine::fallbackTick() {
   if (!booted_) return;
+  TestBenchConfig b;
+  {
+    juce::SpinLock::ScopedLockType l(benchLock_);
+    b = bench_;
+  }
   drainControlEvents();
-  emu::step_us(1000);
+  scopeDt_.store(62.5e-6, std::memory_order_relaxed);
+  for (int k = 0; k < 16; ++k) {
+    applyGenerators(b, 62.5e-6);
+    emu::step_us((k & 1) ? 63 : 62);  // 8*62 + 8*63 = 1000 us
+    captureScope();
+  }
   emu::run_loop_once();
   for (int i = 0; i < 8; ++i)
     cvOutMeter_[(size_t)i].store(emu::get_cv_out(i), std::memory_order_relaxed);
@@ -118,6 +286,7 @@ void EmuEngine::audioDeviceAboutToStart(juce::AudioIODevice* device) {
   fallback_.stopTimer();  // blocks until any in-flight tick has finished
   usPerSample_ = 1e6 / device->getCurrentSampleRate();
   usAccum_ = 0.0;
+  scopeDt_.store(usPerSample_ * 1e-6, std::memory_order_relaxed);
   audioActive_.store(true, std::memory_order_relaxed);
 }
 
@@ -141,21 +310,32 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
     juce::SpinLock::ScopedLockType l(routingLock_);
     r = routing_;
   }
+  TestBenchConfig b;
+  {
+    juce::SpinLock::ScopedLockType l(benchLock_);
+    b = bench_;
+  }
+  const uint32_t genCv = genCvMask_.load(std::memory_order_relaxed);
+  const uint32_t genTrig = genTrigMask_.load(std::memory_order_relaxed);
+  const double dtSample = usPerSample_ * 1e-6;
 
   drainControlEvents();
 
   for (int s = 0; s < numSamples; ++s) {
-    // ---- inputs: samples -> volts -> firmware ----
+    // ---- inputs: samples -> volts -> firmware (generators override) ----
     for (int i = 0; i < 8; ++i) {
+      if ((genCv >> i) & 1u) continue;  // internal generator wins
       const auto& m = r.cvIn[(size_t)i];
       if (m.deviceChannel >= 0 && m.deviceChannel < numIn) {
         const float v = in[m.deviceChannel][s] * r.inFullScaleVolts * m.gain +
                         m.offsetVolts;
         emu::set_cv_in(i, v);
+        cvInNow_[(size_t)i] = v;
         if ((s & 63) == 0) cvInMeter_[(size_t)i].store(v, std::memory_order_relaxed);
       }
     }
     for (int i = 0; i < 4; ++i) {
+      if ((genTrig >> i) & 1u) continue;  // internal generator wins
       const auto& m = r.trigIn[(size_t)i];
       if (m.deviceChannel >= 0 && m.deviceChannel < numIn) {
         const float v = in[m.deviceChannel][s] * r.inFullScaleVolts * m.gain +
@@ -169,6 +349,9 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
         }
       }
     }
+
+    // ---- internal test-bench generators ----
+    applyGenerators(b, dtSample);
 
     // ---- advance firmware time by one sample ----
     usAccum_ += usPerSample_;
@@ -188,6 +371,7 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
         if ((s & 63) == 0) cvOutMeter_[(size_t)i].store(v, std::memory_order_relaxed);
       }
     }
+    captureScope();
   }
 
   // firmware main loop, once per block (menus, saves, housekeeping)

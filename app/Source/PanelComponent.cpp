@@ -209,6 +209,13 @@ class PanelComponent::Jack : public juce::Component,
   void mouseEnter(const juce::MouseEvent&) override { hover_ = true; repaint(); }
   void mouseExit(const juce::MouseEvent&) override { hover_ = false; repaint(); }
 
+  // Marks this jack as driven by an internal test-bench generator.
+  void setInternal(bool b) {
+    if (b != internal_) { internal_ = b; repaint(); }
+  }
+  Kind kind() const { return kind_; }
+  int index() const { return index_; }
+
   void paint(juce::Graphics& g) override {
     const auto b = getLocalBounds().toFloat();
     const auto c = b.getCentre();
@@ -272,6 +279,17 @@ class PanelComponent::Jack : public juce::Component,
       g.setColour(juce::Colour(kAccent).withAlpha(0.55f));
       g.drawEllipse(c.x - mr, c.y - mr, mr * 2.0f, mr * 2.0f, 1.6f);
     }
+
+    // internal-source marker: violet dot when a test-bench generator drives
+    // this jack (signal is internal, not from the audio interface)
+    if (internal_) {
+      const float dr = cell * 0.16f;
+      const float dx = c.x + mr * 0.74f, dy = c.y - mr * 0.74f;
+      g.setColour(juce::Colour(0xff9b5cf6));
+      g.fillEllipse(dx - dr, dy - dr, dr * 2.0f, dr * 2.0f);
+      g.setColour(juce::Colours::white.withAlpha(0.7f));
+      g.drawEllipse(dx - dr, dy - dr, dr * 2.0f, dr * 2.0f, 0.8f);
+    }
   }
 
  private:
@@ -281,14 +299,14 @@ class PanelComponent::Jack : public juce::Component,
   JackId id_;
   std::function<void(JackId)> onClick_;
   float shownVolts_ = 0.0f;
-  bool shownHigh_ = false, hover_ = false;
+  bool shownHigh_ = false, hover_ = false, internal_ = false;
 };
 
 // ---------------------------------------------------------------------------
 // PanelComponent
 // ---------------------------------------------------------------------------
 PanelComponent::PanelComponent(EmuEngine& engine)
-    : engine_(engine), oled_(engine), routing_(engine) {
+    : engine_(engine), oled_(engine), routing_(engine), bench_(engine) {
   panelArt_ = juce::ImageCache::getFromMemory(BinaryData::panel_png,
                                               BinaryData::panel_pngSize);
 
@@ -334,6 +352,22 @@ PanelComponent::PanelComponent(EmuEngine& engine)
   ioButton_.onClick = [this] { openRouting(JackId::None); };
   addAndMakeVisible(ioButton_);
 
+  addAndMakeVisible(bench_);
+  benchButton_.setTooltip("Show/hide the test bench (scope + generators)");
+  benchButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a2d33));
+  benchButton_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3c62b0));
+  benchButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffc9ced8));
+  benchButton_.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+  benchButton_.setClickingTogglesState(true);
+  benchButton_.setToggleState(true, juce::dontSendNotification);
+  benchButton_.onClick = [this] {
+    benchVisible_ = benchButton_.getToggleState();
+    bench_.setVisible(benchVisible_);
+    resized();
+    repaint();
+  };
+  addAndMakeVisible(benchButton_);
+
   keys_ = {{{'A', 'a', emu::BUTTON_A, false},
             {'B', 'b', emu::BUTTON_B, false},
             {'X', 'x', emu::BUTTON_X, false},
@@ -343,7 +377,7 @@ PanelComponent::PanelComponent(EmuEngine& engine)
             {juce::KeyPress::escapeKey, 0, emu::ENC_L_PUSH, false}}};
 
   setWantsKeyboardFocus(true);
-  setSize(650, 1000);
+  setSize(1080, 1000);
   startTimerHz(30);
 }
 
@@ -354,7 +388,13 @@ void PanelComponent::parentHierarchyChanged() {
 }
 
 void PanelComponent::timerCallback() {
-  for (auto* j : jacks_) j->updateMeter();
+  for (auto* j : jacks_) {
+    j->updateMeter();
+    if (j->kind() == Jack::Kind::CvIn)
+      j->setInternal(engine_.genDrivesCvIn(j->index()));
+    else if (j->kind() == Jack::Kind::TrigIn)
+      j->setInternal(engine_.genDrivesTrig(j->index()));
+  }
   const bool active = engine_.audioDeviceActive();
   if (active != lastAudioActive_) {
     lastAudioActive_ = active;
@@ -368,9 +408,17 @@ void PanelComponent::openRouting(JackId focus) {
   if (focus != JackId::None) routing_.focusJack(focus);
 }
 
+int PanelComponent::benchWidth() const {
+  if (!benchVisible_) return 0;
+  // fixed ~400 px, but never squeeze the panel below usability
+  return juce::jmin(400, juce::jmax(280, getWidth() - 420));
+}
+
 juce::Rectangle<float> PanelComponent::panelBounds() const {
-  // reserve a status strip at the bottom; small margins elsewhere
+  // panel replica lives left of the test-bench sidebar; reserve a status
+  // strip at the bottom and small margins elsewhere
   auto area = getLocalBounds().toFloat();
+  area.removeFromRight((float)benchWidth());
   area.removeFromBottom(26.0f);
   area = area.reduced(6.0f);
   float h = area.getHeight();
@@ -431,9 +479,14 @@ void PanelComponent::resized() {
   jacks_[ji++]->setBounds(placeMm(L.midiIn, L.jackRadius));
   jacks_[ji++]->setBounds(placeMm(L.midiOut, L.jackRadius));
 
+  const int bw = benchWidth();
+  bench_.setBounds(getWidth() - bw, 0, bw, getHeight());
+
+  const int leftW = getWidth() - bw;
   const int rw = juce::jmin(440, getWidth() - 30);
   routing_.setBounds(getWidth() - rw, 0, rw, getHeight());
-  ioButton_.setBounds(getWidth() - 54, getHeight() - 23, 46, 19);
+  ioButton_.setBounds(leftW - 54, getHeight() - 23, 46, 19);
+  benchButton_.setBounds(leftW - 110, getHeight() - 23, 52, 19);
 }
 
 void PanelComponent::paint(juce::Graphics& g) {
@@ -456,8 +509,9 @@ void PanelComponent::paint(juce::Graphics& g) {
   if (!lastAudioActive_) {
     g.setColour(juce::Colour(0xff8a93a1));
     g.setFont(juce::Font(juce::FontOptions(12.0f)));
-    g.drawText("no audio device - internal 1 kHz clock", 0, getHeight() - 22,
-               getWidth(), 16, juce::Justification::centred);
+    g.drawText("no audio device - internal 1 kHz clock", 6, getHeight() - 22,
+               juce::jmax(60, getWidth() - benchWidth() - 130), 16,
+               juce::Justification::centredLeft);
   }
 }
 
