@@ -101,6 +101,48 @@ jobs:
           name: XLOC2-macOS-arm64
           path: dist/XLOC2-macOS-arm64.zip
 
+  build-linux-app:
+    name: Linux app (x86_64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Install JUCE build dependencies
+        run: >
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          libasound2-dev libx11-dev libxext-dev libxrandr-dev libxinerama-dev
+          libxcursor-dev libfreetype-dev libfontconfig1-dev
+          libcurl4-openssl-dev pkg-config
+      - name: Configure (single pass, GCC builds core + app)
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+      - name: Build
+        run: cmake --build build -j4 --target xloc2
+      - name: Verify the core is bundled next to the binary
+        run: test -f build/app/xloc2_artefacts/Release/phz_core.so
+      - name: Package
+        run: |
+          mkdir -p dist/XLOC2-linux
+          cp build/app/xloc2_artefacts/Release/XLOC2 dist/XLOC2-linux/
+          cp build/app/xloc2_artefacts/Release/phz_core.so dist/XLOC2-linux/
+          cat > dist/XLOC2-linux/README.txt <<'EOT'
+          XLOC2 emulator (Linux x86_64)
+
+          Run:  ./XLOC2
+          Keep phz_core.so next to the XLOC2 binary (it is the firmware core;
+          extra cores go in ~/.config/Calsynth/XLOC2/cores/).
+
+          Needs standard desktop libraries (ALSA, X11, freetype, curl) --
+          present on most distros; on a minimal Debian/Ubuntu:
+            sudo apt install libasound2t64 libfreetype6 libfontconfig1 libcurl4
+          EOT
+          cd dist && tar czf XLOC2-linux-x86_64.tar.gz XLOC2-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XLOC2-linux-x86_64
+          path: dist/XLOC2-linux-x86_64.tar.gz
+
   # On-demand: build a loadable core module from any Phazerville repo/ref
   # (official release, fork, branch) for macOS arm64. Drop the artifact into
   # the app's cores folder and load it from the FW panel.
