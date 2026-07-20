@@ -63,7 +63,7 @@ jobs:
           cmake -S . -B build-core-ci -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER="$GCC" -DCMAKE_CXX_COMPILER="$GXX" \
             -DXLOC2_BUILD_APP=OFF
-          cmake --build build-core-ci -j4 --target phz_core 2>&1 | tee core-build.log
+          cmake --build build-core-ci -j4 --target phz_core -- -k 2>&1 | tee core-build.log
       - name: Surface compile errors (pass 1)
         if: failure()
         run: |
