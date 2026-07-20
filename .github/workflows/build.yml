@@ -92,6 +92,9 @@ jobs:
         run: |
           mkdir -p dist
           cp -R build/app/xloc2_artefacts/Release/XLOC2.app dist/
+          # ad-hoc sign the whole bundle (incl. the GCC-built dylib) so
+          # downloads only need right-click -> Open, not a quarantine fight
+          codesign --force --deep --sign - dist/XLOC2.app
           cd dist && zip -ry XLOC2-macOS-arm64.zip XLOC2.app
       - uses: actions/upload-artifact@v4
         with:

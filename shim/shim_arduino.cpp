@@ -5,63 +5,25 @@
 #include <Arduino.h>
 #include <EEPROM.h>
 
-#include <cerrno>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
-#include <sys/mman.h>
 
 #include "../core/emu.h"
 #include "../core/emu_internal.h"
 
 // ---------------------------------------------------------------------------
-// Fake peripheral memory: the stub imxrt.h maps registers at the real i.MX RT
-// addresses (0x40000000.., GPIO6-9 at 0x42000000.., ARM debug at 0xE0000000..).
-// We mmap zero-filled memory there so firmware register pokes (LPSPI4, IOMUXC,
-// GPIO ISR flags, DWT cycle counter, ...) are plain memory accesses.
+// Fake peripheral memory: the stub imxrt.h resolves every register access
+// through emu_periph_addr() into these zero-initialized static regions (see
+// the header block in third_party/teensy-x86-stubs/src/imxrt.h). No fixed
+// address mappings anywhere: works under macOS's default 4 GB __PAGEZERO and
+// ad-hoc code signing, and every dlopen'd core instance automatically gets a
+// fresh register file (BSS) — exactly what a hot reload wants.
 // ---------------------------------------------------------------------------
-// Mach-O doesn't support constructor priorities; plain constructor there
-// (ordering vs other ctors doesn't matter — nothing else touches these
-// regions before boot()).
-#ifdef __APPLE__
-__attribute__((constructor))
-#else
-__attribute__((constructor(101)))
-#endif
-static void map_fake_peripherals() {
-  struct Region { uintptr_t base; size_t size; };
-  static const Region regions[] = {
-      {0x40000000u, 0x00400000u},  // AIPS peripherals (LPSPI, IOMUXC, CCM, TMR...)
-      {0x42000000u, 0x00010000u},  // GPIO6..9
-      {0xE0000000u, 0x00100000u},  // ARM DWT/NVIC/SCB
-  };
-  for (const auto& r : regions) {
-#ifdef MAP_FIXED_NOREPLACE
-    void* p = mmap((void*)r.base, r.size, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    if (p == MAP_FAILED && errno == EEXIST) {
-      // Hot reload: a previously loaded core instance already mapped this
-      // region (the mapping outlives dlclose). Replace it with a fresh
-      // zero-filled one — the retired core is stopped before a new one is
-      // loaded, and a freshly booting core expects reset registers anyway.
-      p = mmap((void*)r.base, r.size, PROT_READ | PROT_WRITE,
-               MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-    }
-#else
-    // Darwin has no MAP_FIXED_NOREPLACE; MAP_FIXED both claims the region on
-    // first load and replaces a prior core instance's mapping on hot reload.
-    // The app binary links with -Wl,-pagezero_size,0x4000 so the low 4 GB
-    // (where the i.MX RT peripherals live) is mappable at all on macOS.
-    void* p = mmap((void*)r.base, r.size, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-#endif
-    if (p != (void*)r.base) {
-      fprintf(stderr,
-              "emu: FATAL: cannot map fake peripheral region at %p (got %p)\n",
-              (void*)r.base, p);
-      abort();
-    }
-  }
+extern "C" {
+uint8_t emu_aips_region[EMU_AIPS_REGION_SIZE];
+uint8_t emu_gpio_region[EMU_GPIO_REGION_SIZE];
+uint8_t emu_arm_region[EMU_ARM_REGION_SIZE];
 }
 
 // ---------------------------------------------------------------------------

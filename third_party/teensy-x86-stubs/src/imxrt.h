@@ -1,6 +1,48 @@
 #pragma once
 #include <stdint.h>
 
+// ---------------------------------------------------------------------------
+// XLOC2 emulator: peripheral registers live in static host arrays instead of
+// being mapped at the real i.MX RT absolute addresses. Every register access
+// in this header resolves through emu_periph_addr(), which translates a
+// hardware address into a pointer inside one of three zero-initialized
+// regions (defined in shim/shim_arduino.cpp). This keeps the whole binary
+// free of fixed-address mappings (macOS __PAGEZERO/AMFI-safe) and gives each
+// dlopen'd core instance its own fresh register file for hot reload.
+//
+// The translate is branch-cheap (two range checks + add) and fully
+// constant-folds when the argument is a literal (i.e. for every macro in
+// this header): the compiler emits `region + constant`.
+// ---------------------------------------------------------------------------
+#define EMU_AIPS_REGION_SIZE 0x00400000u  // 0x40000000..0x403FFFFF (AIPS)
+#define EMU_GPIO_REGION_SIZE 0x00030000u  // 0x42000000..0x4202FFFF (GPIO6-9, FLEXIO3)
+#define EMU_ARM_REGION_SIZE  0x00100000u  // 0xE0000000..0xE00FFFFF (DWT/NVIC/SCB/...)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern uint8_t emu_aips_region[EMU_AIPS_REGION_SIZE];
+extern uint8_t emu_gpio_region[EMU_GPIO_REGION_SIZE];
+extern uint8_t emu_arm_region[EMU_ARM_REGION_SIZE];
+#ifdef __cplusplus
+}
+constexpr uint8_t* emu_periph_addr(uintptr_t a) {
+  return (a - 0x40000000u) < EMU_AIPS_REGION_SIZE
+             ? emu_aips_region + (a - 0x40000000u)
+             : (a - 0x42000000u) < EMU_GPIO_REGION_SIZE
+                   ? emu_gpio_region + (a - 0x42000000u)
+                   : emu_arm_region + (a - 0xE0000000u);
+}
+#else
+static inline uint8_t* emu_periph_addr(uintptr_t a) {
+  if ((a - 0x40000000u) < EMU_AIPS_REGION_SIZE)
+    return emu_aips_region + (a - 0x40000000u);
+  if ((a - 0x42000000u) < EMU_GPIO_REGION_SIZE)
+    return emu_gpio_region + (a - 0x42000000u);
+  return emu_arm_region + (a - 0xE0000000u);
+}
+#endif
+
 // Definitions based these documents:
 //   i.MX RT1060 Reference Manual, Rev. 2, 12/2019 - https://www.pjrc.com/teensy/datasheets.html
 //   ARM v7-M Architecture Reference Manual (DDI 0403E.b)
@@ -319,112 +361,112 @@ enum IRQ_NUMBER_t {
 #define DMAMUX_SOURCE_ENET2_TIMER0		124
 #define DMAMUX_SOURCE_ENET2_TIMER1		125
 
-#define IMXRT_CMP1_ADDRESS		0x40094000
-#define IMXRT_CMP2_ADDRESS		0x40094008
-#define IMXRT_CMP3_ADDRESS		0x40094010
-#define IMXRT_CMP4_ADDRESS		0x40094018
-#define IMXRT_ADC1_ADDRESS		0x400C4000
-#define IMXRT_ADC2_ADDRESS		0x400C8000
-#define IMXRT_ADC_ETC_ADDRESS		0x403B0000
-#define IMXRT_AIPSTZ1_ADDRESS		0x4007C000
-#define IMXRT_AIPSTZ2_ADDRESS		0x4017C000
-#define IMXRT_AIPSTZ3_ADDRESS		0x4027C000
-#define IMXRT_AIPSTZ4_ADDRESS		0x4037C000
-#define IMXRT_AOI1_ADDRESS		0x403B4000
-#define IMXRT_AOI2_ADDRESS		0x403B8000
-#define IMXRT_BEE_ADDRESS		0x403EC000
-#define IMXRT_CCM_ADDRESS		0x400FC000
-#define IMXRT_CCM_ANALOG_ADDRESS	0x400D8000
-#define IMXRT_CSI_ADDRESS		0x402BC000
-#define IMXRT_DCDC_ADDRESS		0x40080000
-#define IMXRT_DCP_ADDRESS		0x402FC000
-#define IMXRT_DMAMUX_ADDRESS		0x400EC000
-#define IMXRT_DMA_ADDRESS		0x400E8000
-#define IMXRT_ENC1_ADDRESS		0x403C8000
-#define IMXRT_ENC2_ADDRESS		0x403CC000
-#define IMXRT_ENC3_ADDRESS		0x403D0000
-#define IMXRT_ENC4_ADDRESS		0x403D4000
-#define IMXRT_ENET_ADDRESS		0x402D8000
-#define IMXRT_ENET2_ADDRESS		0x402D4000
-#define IMXRT_EWM_ADDRESS		0x400B4000
-#define IMXRT_FLEXCAN1_ADDRESS		0x401D0000
-#define IMXRT_FLEXCAN2_ADDRESS		0x401D4000
-#define IMXRT_FLEXCAN3_ADDRESS		0x401D8000
-#define IMXRT_FLEXIO1_ADDRESS		0x401AC000
-#define IMXRT_FLEXIO2_ADDRESS		0x401B0000
-#define IMXRT_FLEXIO3_ADDRESS		0x42020000
-#define IMXRT_FLEXPWM1_ADDRESS		0x403DC000
-#define IMXRT_FLEXPWM2_ADDRESS		0x403E0000
-#define IMXRT_FLEXPWM3_ADDRESS		0x403E4000
-#define IMXRT_FLEXPWM4_ADDRESS		0x403E8000
-#define IMXRT_FLEXRAM_ADDRESS		0x400B0000
-#define IMXRT_FLEXSPI_ADDRESS		0x402A8000
-#define IMXRT_FLEXSPI2_ADDRESS		0x402A4000
-#define IMXRT_GPC_ADDRESS		0x400F4000
-#define IMXRT_GPIO1_ADDRESS		0x401B8000
-#define IMXRT_GPIO2_ADDRESS		0x401BC000
-#define IMXRT_GPIO3_ADDRESS		0x401C0000
-#define IMXRT_GPIO4_ADDRESS		0x401C4000
-#define IMXRT_GPIO5_ADDRESS		0x400C0000
-#define IMXRT_GPIO6_ADDRESS		0x42000000
-#define IMXRT_GPIO7_ADDRESS		0x42004000
-#define IMXRT_GPIO8_ADDRESS		0x42008000
-#define IMXRT_GPIO9_ADDRESS		0x4200C000
-#define IMXRT_GPT1_ADDRESS		0x401EC000
-#define IMXRT_GPT2_ADDRESS		0x401F0000
-#define IMXRT_IOMUXC_GPR_ADDRESS	0x400AC000
-#define IMXRT_IOMUXC_SNVS_ADDRESS	0x400A8000
-#define IMXRT_IOMUXC_SNVS_GPR_ADDRESS	0x400A4000
-#define IMXRT_IOMUXC_ADDRESS		0x401F8000
-#define IMXRT_KPP_ADDRESS		0x401FC000
-#define IMXRT_LCDIF_ADDRESS		0x402B8000
-#define IMXRT_LPI2C1_ADDRESS		0x403F0000
-#define IMXRT_LPI2C2_ADDRESS		0x403F4000
-#define IMXRT_LPI2C3_ADDRESS		0x403F8000
-#define IMXRT_LPI2C4_ADDRESS		0x403FC000
-#define IMXRT_LPSPI1_ADDRESS		0x40394000
-#define IMXRT_LPSPI2_ADDRESS		0x40398000
-#define IMXRT_LPSPI3_ADDRESS		0x4039C000
-#define IMXRT_LPSPI4_ADDRESS		0x403A0000
-#define IMXRT_LPUART1_ADDRESS		0x40184000
-#define IMXRT_LPUART2_ADDRESS		0x40188000
-#define IMXRT_LPUART3_ADDRESS		0x4018C000
-#define IMXRT_LPUART4_ADDRESS		0x40190000
-#define IMXRT_LPUART5_ADDRESS		0x40194000
-#define IMXRT_LPUART6_ADDRESS		0x40198000
-#define IMXRT_LPUART7_ADDRESS		0x4019C000
-#define IMXRT_LPUART8_ADDRESS		0x401A0000
-#define IMXRT_OCOTP_ADDRESS		0x401F4000
-#define IMXRT_PIT_ADDRESS		0x40084000
-#define IMXRT_PMU_ADDRESS		0x400D8000
-#define IMXRT_PXP_ADDRESS		0x402B4000
-#define IMXRT_TMR1_ADDRESS		0x401DC000
-#define IMXRT_TMR2_ADDRESS		0x401E0000
-#define IMXRT_TMR3_ADDRESS		0x401E4000
-#define IMXRT_TMR4_ADDRESS		0x401E8000
-#define IMXRT_I2S1_ADDRESS		0x40384000
-#define IMXRT_I2S2_ADDRESS		0x40388000
-#define IMXRT_I2S3_ADDRESS		0x4038C000
-#define IMXRT_SEMC_ADDRESS		0x402F0000
-#define IMXRT_SNVS_ADDRESS		0x400D4000
-#define IMXRT_SPDIF_ADDRESS		0x40380000
-#define IMXRT_SRC_ADDRESS		0x400F8000
-#define IMXRT_TEMPMON_ADDRESS		0x400D8180
-#define IMXRT_TRNG_ADDRESS		0x400CC000
-#define IMXRT_TSC_ADDRESS		0x400E0000
-#define IMXRT_USB1_ADDRESS		0x402E0000
-#define IMXRT_USB2_ADDRESS		0x402E0200
-#define IMXRT_USBPHY1_ADDRESS		0x400D9000
-#define IMXRT_USBPHY2_ADDRESS		0x400DA000
-#define IMXRT_USDHC1_ADDRESS		0x402C0000
-#define IMXRT_USDHC2_ADDRESS		0x402C4000
-#define IMXRT_WDOG1_ADDRESS		0x400B8000
-#define IMXRT_WDOG2_ADDRESS		0x400D0000
-#define IMXRT_WDOG3_ADDRESS		0x400BC000
-#define IMXRT_XBARA1_ADDRESS		0x403BC000
-#define IMXRT_XBARB2_ADDRESS		0x403C0000
-#define IMXRT_XBARB3_ADDRESS		0x403C4000
-#define IMXRT_XTALOSC24M_ADDRESS	0x400D8000
+#define IMXRT_CMP1_ADDRESS		(emu_periph_addr(0x40094000u))
+#define IMXRT_CMP2_ADDRESS		(emu_periph_addr(0x40094008u))
+#define IMXRT_CMP3_ADDRESS		(emu_periph_addr(0x40094010u))
+#define IMXRT_CMP4_ADDRESS		(emu_periph_addr(0x40094018u))
+#define IMXRT_ADC1_ADDRESS		(emu_periph_addr(0x400C4000u))
+#define IMXRT_ADC2_ADDRESS		(emu_periph_addr(0x400C8000u))
+#define IMXRT_ADC_ETC_ADDRESS		(emu_periph_addr(0x403B0000u))
+#define IMXRT_AIPSTZ1_ADDRESS		(emu_periph_addr(0x4007C000u))
+#define IMXRT_AIPSTZ2_ADDRESS		(emu_periph_addr(0x4017C000u))
+#define IMXRT_AIPSTZ3_ADDRESS		(emu_periph_addr(0x4027C000u))
+#define IMXRT_AIPSTZ4_ADDRESS		(emu_periph_addr(0x4037C000u))
+#define IMXRT_AOI1_ADDRESS		(emu_periph_addr(0x403B4000u))
+#define IMXRT_AOI2_ADDRESS		(emu_periph_addr(0x403B8000u))
+#define IMXRT_BEE_ADDRESS		(emu_periph_addr(0x403EC000u))
+#define IMXRT_CCM_ADDRESS		(emu_periph_addr(0x400FC000u))
+#define IMXRT_CCM_ANALOG_ADDRESS	(emu_periph_addr(0x400D8000u))
+#define IMXRT_CSI_ADDRESS		(emu_periph_addr(0x402BC000u))
+#define IMXRT_DCDC_ADDRESS		(emu_periph_addr(0x40080000u))
+#define IMXRT_DCP_ADDRESS		(emu_periph_addr(0x402FC000u))
+#define IMXRT_DMAMUX_ADDRESS		(emu_periph_addr(0x400EC000u))
+#define IMXRT_DMA_ADDRESS		(emu_periph_addr(0x400E8000u))
+#define IMXRT_ENC1_ADDRESS		(emu_periph_addr(0x403C8000u))
+#define IMXRT_ENC2_ADDRESS		(emu_periph_addr(0x403CC000u))
+#define IMXRT_ENC3_ADDRESS		(emu_periph_addr(0x403D0000u))
+#define IMXRT_ENC4_ADDRESS		(emu_periph_addr(0x403D4000u))
+#define IMXRT_ENET_ADDRESS		(emu_periph_addr(0x402D8000u))
+#define IMXRT_ENET2_ADDRESS		(emu_periph_addr(0x402D4000u))
+#define IMXRT_EWM_ADDRESS		(emu_periph_addr(0x400B4000u))
+#define IMXRT_FLEXCAN1_ADDRESS		(emu_periph_addr(0x401D0000u))
+#define IMXRT_FLEXCAN2_ADDRESS		(emu_periph_addr(0x401D4000u))
+#define IMXRT_FLEXCAN3_ADDRESS		(emu_periph_addr(0x401D8000u))
+#define IMXRT_FLEXIO1_ADDRESS		(emu_periph_addr(0x401AC000u))
+#define IMXRT_FLEXIO2_ADDRESS		(emu_periph_addr(0x401B0000u))
+#define IMXRT_FLEXIO3_ADDRESS		(emu_periph_addr(0x42020000u))
+#define IMXRT_FLEXPWM1_ADDRESS		(emu_periph_addr(0x403DC000u))
+#define IMXRT_FLEXPWM2_ADDRESS		(emu_periph_addr(0x403E0000u))
+#define IMXRT_FLEXPWM3_ADDRESS		(emu_periph_addr(0x403E4000u))
+#define IMXRT_FLEXPWM4_ADDRESS		(emu_periph_addr(0x403E8000u))
+#define IMXRT_FLEXRAM_ADDRESS		(emu_periph_addr(0x400B0000u))
+#define IMXRT_FLEXSPI_ADDRESS		(emu_periph_addr(0x402A8000u))
+#define IMXRT_FLEXSPI2_ADDRESS		(emu_periph_addr(0x402A4000u))
+#define IMXRT_GPC_ADDRESS		(emu_periph_addr(0x400F4000u))
+#define IMXRT_GPIO1_ADDRESS		(emu_periph_addr(0x401B8000u))
+#define IMXRT_GPIO2_ADDRESS		(emu_periph_addr(0x401BC000u))
+#define IMXRT_GPIO3_ADDRESS		(emu_periph_addr(0x401C0000u))
+#define IMXRT_GPIO4_ADDRESS		(emu_periph_addr(0x401C4000u))
+#define IMXRT_GPIO5_ADDRESS		(emu_periph_addr(0x400C0000u))
+#define IMXRT_GPIO6_ADDRESS		(emu_periph_addr(0x42000000u))
+#define IMXRT_GPIO7_ADDRESS		(emu_periph_addr(0x42004000u))
+#define IMXRT_GPIO8_ADDRESS		(emu_periph_addr(0x42008000u))
+#define IMXRT_GPIO9_ADDRESS		(emu_periph_addr(0x4200C000u))
+#define IMXRT_GPT1_ADDRESS		(emu_periph_addr(0x401EC000u))
+#define IMXRT_GPT2_ADDRESS		(emu_periph_addr(0x401F0000u))
+#define IMXRT_IOMUXC_GPR_ADDRESS	(emu_periph_addr(0x400AC000u))
+#define IMXRT_IOMUXC_SNVS_ADDRESS	(emu_periph_addr(0x400A8000u))
+#define IMXRT_IOMUXC_SNVS_GPR_ADDRESS	(emu_periph_addr(0x400A4000u))
+#define IMXRT_IOMUXC_ADDRESS		(emu_periph_addr(0x401F8000u))
+#define IMXRT_KPP_ADDRESS		(emu_periph_addr(0x401FC000u))
+#define IMXRT_LCDIF_ADDRESS		(emu_periph_addr(0x402B8000u))
+#define IMXRT_LPI2C1_ADDRESS		(emu_periph_addr(0x403F0000u))
+#define IMXRT_LPI2C2_ADDRESS		(emu_periph_addr(0x403F4000u))
+#define IMXRT_LPI2C3_ADDRESS		(emu_periph_addr(0x403F8000u))
+#define IMXRT_LPI2C4_ADDRESS		(emu_periph_addr(0x403FC000u))
+#define IMXRT_LPSPI1_ADDRESS		(emu_periph_addr(0x40394000u))
+#define IMXRT_LPSPI2_ADDRESS		(emu_periph_addr(0x40398000u))
+#define IMXRT_LPSPI3_ADDRESS		(emu_periph_addr(0x4039C000u))
+#define IMXRT_LPSPI4_ADDRESS		(emu_periph_addr(0x403A0000u))
+#define IMXRT_LPUART1_ADDRESS		(emu_periph_addr(0x40184000u))
+#define IMXRT_LPUART2_ADDRESS		(emu_periph_addr(0x40188000u))
+#define IMXRT_LPUART3_ADDRESS		(emu_periph_addr(0x4018C000u))
+#define IMXRT_LPUART4_ADDRESS		(emu_periph_addr(0x40190000u))
+#define IMXRT_LPUART5_ADDRESS		(emu_periph_addr(0x40194000u))
+#define IMXRT_LPUART6_ADDRESS		(emu_periph_addr(0x40198000u))
+#define IMXRT_LPUART7_ADDRESS		(emu_periph_addr(0x4019C000u))
+#define IMXRT_LPUART8_ADDRESS		(emu_periph_addr(0x401A0000u))
+#define IMXRT_OCOTP_ADDRESS		(emu_periph_addr(0x401F4000u))
+#define IMXRT_PIT_ADDRESS		(emu_periph_addr(0x40084000u))
+#define IMXRT_PMU_ADDRESS		(emu_periph_addr(0x400D8000u))
+#define IMXRT_PXP_ADDRESS		(emu_periph_addr(0x402B4000u))
+#define IMXRT_TMR1_ADDRESS		(emu_periph_addr(0x401DC000u))
+#define IMXRT_TMR2_ADDRESS		(emu_periph_addr(0x401E0000u))
+#define IMXRT_TMR3_ADDRESS		(emu_periph_addr(0x401E4000u))
+#define IMXRT_TMR4_ADDRESS		(emu_periph_addr(0x401E8000u))
+#define IMXRT_I2S1_ADDRESS		(emu_periph_addr(0x40384000u))
+#define IMXRT_I2S2_ADDRESS		(emu_periph_addr(0x40388000u))
+#define IMXRT_I2S3_ADDRESS		(emu_periph_addr(0x4038C000u))
+#define IMXRT_SEMC_ADDRESS		(emu_periph_addr(0x402F0000u))
+#define IMXRT_SNVS_ADDRESS		(emu_periph_addr(0x400D4000u))
+#define IMXRT_SPDIF_ADDRESS		(emu_periph_addr(0x40380000u))
+#define IMXRT_SRC_ADDRESS		(emu_periph_addr(0x400F8000u))
+#define IMXRT_TEMPMON_ADDRESS		(emu_periph_addr(0x400D8180u))
+#define IMXRT_TRNG_ADDRESS		(emu_periph_addr(0x400CC000u))
+#define IMXRT_TSC_ADDRESS		(emu_periph_addr(0x400E0000u))
+#define IMXRT_USB1_ADDRESS		(emu_periph_addr(0x402E0000u))
+#define IMXRT_USB2_ADDRESS		(emu_periph_addr(0x402E0200u))
+#define IMXRT_USBPHY1_ADDRESS		(emu_periph_addr(0x400D9000u))
+#define IMXRT_USBPHY2_ADDRESS		(emu_periph_addr(0x400DA000u))
+#define IMXRT_USDHC1_ADDRESS		(emu_periph_addr(0x402C0000u))
+#define IMXRT_USDHC2_ADDRESS		(emu_periph_addr(0x402C4000u))
+#define IMXRT_WDOG1_ADDRESS		(emu_periph_addr(0x400B8000u))
+#define IMXRT_WDOG2_ADDRESS		(emu_periph_addr(0x400D0000u))
+#define IMXRT_WDOG3_ADDRESS		(emu_periph_addr(0x400BC000u))
+#define IMXRT_XBARA1_ADDRESS		(emu_periph_addr(0x403BC000u))
+#define IMXRT_XBARB2_ADDRESS		(emu_periph_addr(0x403C0000u))
+#define IMXRT_XBARB3_ADDRESS		(emu_periph_addr(0x403C4000u))
+#define IMXRT_XTALOSC24M_ADDRESS	(emu_periph_addr(0x400D8000u))
 
 
 
@@ -9858,8 +9900,8 @@ These register are used by the ROM code and should not be used by application so
 
 
 // System Control Space (SCS), ARMv7 ref manual, B3.2, page 708
-#define SCB_CPUID               (*(const    uint32_t *)0xE000ED00) // CPUID Base Register
-#define SCB_ICSR                (*(volatile uint32_t *)0xE000ED04) // Interrupt Control and State
+#define SCB_CPUID               (*(const    uint32_t *)emu_periph_addr(0xE000ED00u)) // CPUID Base Register
+#define SCB_ICSR                (*(volatile uint32_t *)emu_periph_addr(0xE000ED04u)) // Interrupt Control and State
 #define SCB_ICSR_NMIPENDSET             ((uint32_t)(1<<31))
 #define SCB_ICSR_PENDSVSET              ((uint32_t)(1<<28))
 #define SCB_ICSR_PENDSVCLR              ((uint32_t)(1<<27))
@@ -9868,13 +9910,13 @@ These register are used by the ROM code and should not be used by application so
 #define SCB_ICSR_ISRPREEMPT             ((uint32_t)(1<<23))
 #define SCB_ICSR_ISRPENDING             ((uint32_t)(1<<22))
 #define SCB_ICSR_RETTOBASE              ((uint32_t)(1<<11))
-#define SCB_VTOR                (*(volatile uint32_t *)0xE000ED08) // Vector Table Offset
-#define SCB_AIRCR               (*(volatile uint32_t *)0xE000ED0C) // Application Interrupt & Reset
-#define SCB_SCR                 (*(volatile uint32_t *)0xE000ED10) // System Control Register
+#define SCB_VTOR                (*(volatile uint32_t *)emu_periph_addr(0xE000ED08u)) // Vector Table Offset
+#define SCB_AIRCR               (*(volatile uint32_t *)emu_periph_addr(0xE000ED0Cu)) // Application Interrupt & Reset
+#define SCB_SCR                 (*(volatile uint32_t *)emu_periph_addr(0xE000ED10u)) // System Control Register
 #define SCB_SCR_SEVONPEND   ((uint8_t)0x10)        // Send Event on Pending bit
 #define SCB_SCR_SLEEPDEEP   ((uint8_t)0x04)        // Sleep or Deep Sleep
 #define SCB_SCR_SLEEPONEXIT ((uint8_t)0x02)        // Sleep-on-exit
-#define SCB_CCR                 (*(volatile uint32_t *)0xE000ED14) // Configuration and Control
+#define SCB_CCR                 (*(volatile uint32_t *)emu_periph_addr(0xE000ED14u)) // Configuration and Control
 #define SCB_CCR_BP			((uint32_t)(1<<18))	// Branch prediction enable
 #define SCB_CCR_IC			((uint32_t)(1<<17))	// Instruction caches enable
 #define SCB_CCR_DC			((uint32_t)(1<<16))
@@ -9884,91 +9926,91 @@ These register are used by the ROM code and should not be used by application so
 #define SCB_CCR_UNALIGN_TRP		((uint32_t)(1<<3))
 #define SCB_CCR_USERSETMPEND		((uint32_t)(1<<1))
 #define SCB_CCR_NONBASETHRDENA		((uint32_t)(1<<0))
-#define SCB_SHPR1               (*(volatile uint32_t *)0xE000ED18) // System Handler Priority 1
-#define SCB_SHPR2               (*(volatile uint32_t *)0xE000ED1C) // System Handler Priority 2
-#define SCB_SHPR3               (*(volatile uint32_t *)0xE000ED20) // System Handler Priority 3
-#define SCB_SHCSR               (*(volatile uint32_t *)0xE000ED24) // System Handler Control & State
+#define SCB_SHPR1               (*(volatile uint32_t *)emu_periph_addr(0xE000ED18u)) // System Handler Priority 1
+#define SCB_SHPR2               (*(volatile uint32_t *)emu_periph_addr(0xE000ED1Cu)) // System Handler Priority 2
+#define SCB_SHPR3               (*(volatile uint32_t *)emu_periph_addr(0xE000ED20u)) // System Handler Priority 3
+#define SCB_SHCSR               (*(volatile uint32_t *)emu_periph_addr(0xE000ED24u)) // System Handler Control & State
 #define SCB_SHCSR_MEMFAULTENA		((uint32_t)(1<<16))
 #define SCB_SHCSR_BUSFAULTENA		((uint32_t)(1<<17))
 #define SCB_SHCSR_USGFAULTENA		((uint32_t)(1<<18))
-#define SCB_CFSR                (*(volatile uint32_t *)0xE000ED28) // Configurable Fault Status
-#define SCB_HFSR                (*(volatile uint32_t *)0xE000ED2C) // HardFault Status
-#define SCB_DFSR                (*(volatile uint32_t *)0xE000ED30) // Debug Fault Status
-#define SCB_MMFAR               (*(volatile uint32_t *)0xE000ED34) // MemManage Fault Address
-#define SCB_BFAR                (*(volatile uint32_t *)0xE000ED38) // Bus Fault Address
-#define SCB_AFAR                (*(volatile uint32_t *)0xE000ED3C) // Aux Fault Address
-#define SCB_ID_PFR0		(*(const    uint32_t *)0xE000ED40) // Processor Feature 0
-#define SCB_ID_PFR1		(*(const    uint32_t *)0xE000ED44) // Processor Feature 1
-#define SCB_ID_DFR0		(*(const    uint32_t *)0xE000ED48) // Debug Feature 0
-#define SCB_ID_AFR0		(*(const    uint32_t *)0xE000ED4C) // Auxiliary Feature 0
-#define SCB_ID_MMFR0		(*(const    uint32_t *)0xE000ED50) // Memory Model Feature 0
-#define SCB_ID_MMFR1		(*(const    uint32_t *)0xE000ED54) // Memory Model Feature 1
-#define SCB_ID_MMFR2		(*(const    uint32_t *)0xE000ED58) // Memory Model Feature 2
-#define SCB_ID_MMFR3		(*(const    uint32_t *)0xE000ED5C) // Memory Model Feature 3
-#define SCB_ID_ISAR0		(*(const    uint32_t *)0xE000ED60) // Instruction Set Attribute 0
-#define SCB_ID_ISAR1		(*(const    uint32_t *)0xE000ED64) // Instruction Set Attribute 1
-#define SCB_ID_ISAR2 		(*(const    uint32_t *)0xE000ED68) // Instruction Set Attribute 2
-#define SCB_ID_ISAR3 		(*(const    uint32_t *)0xE000ED6C) // Instruction Set Attribute 3
-#define SCB_ID_ISAR4 		(*(const    uint32_t *)0xE000ED70) // Instruction Set Attribute 4
-#define SCB_ID_CLIDR		(*(const    uint32_t *)0xE000ED78) // Cache Level ID
-#define SCB_ID_CTR		(*(const    uint32_t *)0xE000ED7C) // Cache Type
-#define SCB_ID_CCSIDR		(*(const    uint32_t *)0xE000ED80) // Cache Size ID
-#define SCB_ID_CSSELR		(*(volatile uint32_t *)0xE000ED84) // Cache Size Selection
-#define SCB_CPACR               (*(volatile uint32_t *)0xE000ED88) // Coprocessor Access Control
-#define SCB_FPCCR               (*(volatile uint32_t *)0xE000EF34) // FP Context Control
-#define SCB_FPCAR               (*(volatile uint32_t *)0xE000EF38) // FP Context Address
-#define SCB_FPDSCR              (*(volatile uint32_t *)0xE000EF3C) // FP Default Status Control
-#define SCB_MVFR0               (*(volatile uint32_t *)0xE000EF40) // Media & FP Feature 0
-#define SCB_MVFR1               (*(volatile uint32_t *)0xE000EF44) // Media & FP Feature 1
-#define SCB_MVFR2               (*(volatile uint32_t *)0xE000EF48) // Media & FP Feature 2
+#define SCB_CFSR                (*(volatile uint32_t *)emu_periph_addr(0xE000ED28u)) // Configurable Fault Status
+#define SCB_HFSR                (*(volatile uint32_t *)emu_periph_addr(0xE000ED2Cu)) // HardFault Status
+#define SCB_DFSR                (*(volatile uint32_t *)emu_periph_addr(0xE000ED30u)) // Debug Fault Status
+#define SCB_MMFAR               (*(volatile uint32_t *)emu_periph_addr(0xE000ED34u)) // MemManage Fault Address
+#define SCB_BFAR                (*(volatile uint32_t *)emu_periph_addr(0xE000ED38u)) // Bus Fault Address
+#define SCB_AFAR                (*(volatile uint32_t *)emu_periph_addr(0xE000ED3Cu)) // Aux Fault Address
+#define SCB_ID_PFR0		(*(const    uint32_t *)emu_periph_addr(0xE000ED40u)) // Processor Feature 0
+#define SCB_ID_PFR1		(*(const    uint32_t *)emu_periph_addr(0xE000ED44u)) // Processor Feature 1
+#define SCB_ID_DFR0		(*(const    uint32_t *)emu_periph_addr(0xE000ED48u)) // Debug Feature 0
+#define SCB_ID_AFR0		(*(const    uint32_t *)emu_periph_addr(0xE000ED4Cu)) // Auxiliary Feature 0
+#define SCB_ID_MMFR0		(*(const    uint32_t *)emu_periph_addr(0xE000ED50u)) // Memory Model Feature 0
+#define SCB_ID_MMFR1		(*(const    uint32_t *)emu_periph_addr(0xE000ED54u)) // Memory Model Feature 1
+#define SCB_ID_MMFR2		(*(const    uint32_t *)emu_periph_addr(0xE000ED58u)) // Memory Model Feature 2
+#define SCB_ID_MMFR3		(*(const    uint32_t *)emu_periph_addr(0xE000ED5Cu)) // Memory Model Feature 3
+#define SCB_ID_ISAR0		(*(const    uint32_t *)emu_periph_addr(0xE000ED60u)) // Instruction Set Attribute 0
+#define SCB_ID_ISAR1		(*(const    uint32_t *)emu_periph_addr(0xE000ED64u)) // Instruction Set Attribute 1
+#define SCB_ID_ISAR2 		(*(const    uint32_t *)emu_periph_addr(0xE000ED68u)) // Instruction Set Attribute 2
+#define SCB_ID_ISAR3 		(*(const    uint32_t *)emu_periph_addr(0xE000ED6Cu)) // Instruction Set Attribute 3
+#define SCB_ID_ISAR4 		(*(const    uint32_t *)emu_periph_addr(0xE000ED70u)) // Instruction Set Attribute 4
+#define SCB_ID_CLIDR		(*(const    uint32_t *)emu_periph_addr(0xE000ED78u)) // Cache Level ID
+#define SCB_ID_CTR		(*(const    uint32_t *)emu_periph_addr(0xE000ED7Cu)) // Cache Type
+#define SCB_ID_CCSIDR		(*(const    uint32_t *)emu_periph_addr(0xE000ED80u)) // Cache Size ID
+#define SCB_ID_CSSELR		(*(volatile uint32_t *)emu_periph_addr(0xE000ED84u)) // Cache Size Selection
+#define SCB_CPACR               (*(volatile uint32_t *)emu_periph_addr(0xE000ED88u)) // Coprocessor Access Control
+#define SCB_FPCCR               (*(volatile uint32_t *)emu_periph_addr(0xE000EF34u)) // FP Context Control
+#define SCB_FPCAR               (*(volatile uint32_t *)emu_periph_addr(0xE000EF38u)) // FP Context Address
+#define SCB_FPDSCR              (*(volatile uint32_t *)emu_periph_addr(0xE000EF3Cu)) // FP Default Status Control
+#define SCB_MVFR0               (*(volatile uint32_t *)emu_periph_addr(0xE000EF40u)) // Media & FP Feature 0
+#define SCB_MVFR1               (*(volatile uint32_t *)emu_periph_addr(0xE000EF44u)) // Media & FP Feature 1
+#define SCB_MVFR2               (*(volatile uint32_t *)emu_periph_addr(0xE000EF48u)) // Media & FP Feature 2
 
-#define SYST_CSR                (*(volatile uint32_t *)0xE000E010) // SysTick Control and Status
+#define SYST_CSR                (*(volatile uint32_t *)emu_periph_addr(0xE000E010u)) // SysTick Control and Status
 #define SYST_CSR_COUNTFLAG              ((uint32_t)(1<<16))
 #define SYST_CSR_CLKSOURCE              ((uint32_t)(1<<2))
 #define SYST_CSR_TICKINT                ((uint32_t)(1<<1))
 #define SYST_CSR_ENABLE                 ((uint32_t)(1<<0))
-#define SYST_RVR                (*(volatile uint32_t *)0xE000E014) // SysTick Reload Value Register
-#define SYST_CVR                (*(volatile uint32_t *)0xE000E018) // SysTick Current Value Register
-#define SYST_CALIB              (*(const    uint32_t *)0xE000E01C) // SysTick Calibration Value
+#define SYST_RVR                (*(volatile uint32_t *)emu_periph_addr(0xE000E014u)) // SysTick Reload Value Register
+#define SYST_CVR                (*(volatile uint32_t *)emu_periph_addr(0xE000E018u)) // SysTick Current Value Register
+#define SYST_CALIB              (*(const    uint32_t *)emu_periph_addr(0xE000E01Cu)) // SysTick Calibration Value
 
 // Nested Vectored Interrupt Controller, Table 3-4 & ARMv7 ref, appendix B3.4 (page 750)
-#define NVIC_ISER0              (*(volatile uint32_t *)0xE000E100)
-#define NVIC_ISER1              (*(volatile uint32_t *)0xE000E104)
-#define NVIC_ISER2              (*(volatile uint32_t *)0xE000E108)
-#define NVIC_ISER3              (*(volatile uint32_t *)0xE000E10C)
-#define NVIC_ISER4              (*(volatile uint32_t *)0xE000E110)
-#define NVIC_ICER0              (*(volatile uint32_t *)0xE000E180)
-#define NVIC_ICER1              (*(volatile uint32_t *)0xE000E184)
-#define NVIC_ICER2              (*(volatile uint32_t *)0xE000E188)
-#define NVIC_ICER3              (*(volatile uint32_t *)0xE000E18C)
-#define NVIC_ICER4              (*(volatile uint32_t *)0xE000E190)
-#define NVIC_STIR		(*(volatile uint32_t *)0xE000EF00)
+#define NVIC_ISER0              (*(volatile uint32_t *)emu_periph_addr(0xE000E100u))
+#define NVIC_ISER1              (*(volatile uint32_t *)emu_periph_addr(0xE000E104u))
+#define NVIC_ISER2              (*(volatile uint32_t *)emu_periph_addr(0xE000E108u))
+#define NVIC_ISER3              (*(volatile uint32_t *)emu_periph_addr(0xE000E10Cu))
+#define NVIC_ISER4              (*(volatile uint32_t *)emu_periph_addr(0xE000E110u))
+#define NVIC_ICER0              (*(volatile uint32_t *)emu_periph_addr(0xE000E180u))
+#define NVIC_ICER1              (*(volatile uint32_t *)emu_periph_addr(0xE000E184u))
+#define NVIC_ICER2              (*(volatile uint32_t *)emu_periph_addr(0xE000E188u))
+#define NVIC_ICER3              (*(volatile uint32_t *)emu_periph_addr(0xE000E18Cu))
+#define NVIC_ICER4              (*(volatile uint32_t *)emu_periph_addr(0xE000E190u))
+#define NVIC_STIR		(*(volatile uint32_t *)emu_periph_addr(0xE000EF00u))
 #define NVIC_ENABLE_IRQ(n)      (*(&NVIC_ISER0 + ((n) >> 5)) = (1 << ((n) & 31)))
 #define NVIC_DISABLE_IRQ(n)     (*(&NVIC_ICER0 + ((n) >> 5)) = (1 << ((n) & 31)))
-#define NVIC_SET_PENDING(n)     (*((volatile uint32_t *)0xE000E200 + ((n) >> 5)) = (1 << ((n) & 31)))
-#define NVIC_CLEAR_PENDING(n)   (*((volatile uint32_t *)0xE000E280 + ((n) >> 5)) = (1 << ((n) & 31)))
+#define NVIC_SET_PENDING(n)     (*((volatile uint32_t *)emu_periph_addr(0xE000E200u) + ((n) >> 5)) = (1 << ((n) & 31)))
+#define NVIC_CLEAR_PENDING(n)   (*((volatile uint32_t *)emu_periph_addr(0xE000E280u) + ((n) >> 5)) = (1 << ((n) & 31)))
 // #define NVIC_IS_ENABLED(n)      (*(&NVIC_ISER0 + ((n) >> 5)) & (1 << ((n) & 31)))
-#define NVIC_IS_PENDING(n)      (*((volatile uint32_t *)0xE000E200 + ((n) >> 5)) & (1 << ((n) & 31)))
-#define NVIC_IS_ACTIVE(n)       (*((volatile uint32_t *)0xE000E300 + ((n) >> 5)) & (1 << ((n) & 31)))
+#define NVIC_IS_PENDING(n)      (*((volatile uint32_t *)emu_periph_addr(0xE000E200u) + ((n) >> 5)) & (1 << ((n) & 31)))
+#define NVIC_IS_ACTIVE(n)       (*((volatile uint32_t *)emu_periph_addr(0xE000E300u) + ((n) >> 5)) & (1 << ((n) & 31)))
 #define NVIC_TRIGGER_IRQ(n)     NVIC_STIR=(n)
 
-#define ARM_DEMCR               (*(volatile uint32_t *)0xE000EDFC) // Debug Exception and Monitor Control
+#define ARM_DEMCR               (*(volatile uint32_t *)emu_periph_addr(0xE000EDFCu)) // Debug Exception and Monitor Control
 #define ARM_DEMCR_TRCENA                (1 << 24)        // Enable debugging & monitoring blocks
-#define ARM_DWT_CTRL            (*(volatile uint32_t *)0xE0001000) // DWT control register
+#define ARM_DWT_CTRL            (*(volatile uint32_t *)emu_periph_addr(0xE0001000u)) // DWT control register
 #define ARM_DWT_CTRL_CYCCNTENA          (1 << 0)                // Enable cycle count
-#define ARM_DWT_CYCCNT          (*(volatile uint32_t *)0xE0001004) // Cycle count register
+#define ARM_DWT_CYCCNT          (*(volatile uint32_t *)emu_periph_addr(0xE0001004u)) // Cycle count register
 
-#define SCB_MPU_TYPE		(*(volatile uint32_t *)0xE000ED90) // 
-#define SCB_MPU_CTRL		(*(volatile uint32_t *)0xE000ED94) // 
+#define SCB_MPU_TYPE		(*(volatile uint32_t *)emu_periph_addr(0xE000ED90u)) // 
+#define SCB_MPU_CTRL		(*(volatile uint32_t *)emu_periph_addr(0xE000ED94u)) // 
 #define SCB_MPU_CTRL_PRIVDEFENA		((uint32_t)(1<<2)) // Enables default memory map
 #define SCB_MPU_CTRL_HFNMIENA		((uint32_t)(1<<1)) // Use MPU for HardFault & NMI
 #define SCB_MPU_CTRL_ENABLE		((uint32_t)(1<<0)) // Enables MPU
-#define SCB_MPU_RNR		(*(volatile uint32_t *)0xE000ED98) // 
-#define SCB_MPU_RBAR		(*(volatile uint32_t *)0xE000ED9C) // 
+#define SCB_MPU_RNR		(*(volatile uint32_t *)emu_periph_addr(0xE000ED98u)) // 
+#define SCB_MPU_RBAR		(*(volatile uint32_t *)emu_periph_addr(0xE000ED9Cu)) // 
 #define SCB_MPU_RBAR_ADDR_MASK		((uint32_t)(0xFFFFFFE0))
 #define SCB_MPU_RBAR_VALID		((uint32_t)(1<<4))
 #define SCB_MPU_RBAR_REGION(n)		((uint32_t)((n) & 15))
-#define SCB_MPU_RASR		(*(volatile uint32_t *)0xE000EDA0) // ARM DDI0403E, pg 696
+#define SCB_MPU_RASR		(*(volatile uint32_t *)emu_periph_addr(0xE000EDA0u)) // ARM DDI0403E, pg 696
 #define SCB_MPU_RASR_XN			((uint32_t)(1<<28))
 #define SCB_MPU_RASR_AP(n)		((uint32_t)(((n) & 7) << 24))
 #define SCB_MPU_RASR_TEX(n)		((uint32_t)(((n) & 7) << 19))
@@ -9978,23 +10020,23 @@ These register are used by the ROM code and should not be used by application so
 #define SCB_MPU_RASR_SRD(n)		((uint32_t)(((n) & 255) << 8))
 #define SCB_MPU_RASR_SIZE(n)		((uint32_t)(((n) & 31) << 1))
 #define SCB_MPU_RASR_ENABLE		((uint32_t)(1<<0))
-#define SCB_MPU_RBAR_A1		(*(volatile uint32_t *)0xE000EDA4) // 
-#define SCB_MPU_RASR_A1		(*(volatile uint32_t *)0xE000EDA8) // 
-#define SCB_MPU_RBAR_A2		(*(volatile uint32_t *)0xE000EDAC) // 
-#define SCB_MPU_RASR_A2		(*(volatile uint32_t *)0xE000EDB0) // 
-#define SCB_MPU_RBAR_A3		(*(volatile uint32_t *)0xE000EDB4) // 
-#define SCB_MPU_RASR_A3		(*(volatile uint32_t *)0xE000EDB8) // 
+#define SCB_MPU_RBAR_A1		(*(volatile uint32_t *)emu_periph_addr(0xE000EDA4u)) // 
+#define SCB_MPU_RASR_A1		(*(volatile uint32_t *)emu_periph_addr(0xE000EDA8u)) // 
+#define SCB_MPU_RBAR_A2		(*(volatile uint32_t *)emu_periph_addr(0xE000EDACu)) // 
+#define SCB_MPU_RASR_A2		(*(volatile uint32_t *)emu_periph_addr(0xE000EDB0u)) // 
+#define SCB_MPU_RBAR_A3		(*(volatile uint32_t *)emu_periph_addr(0xE000EDB4u)) // 
+#define SCB_MPU_RASR_A3		(*(volatile uint32_t *)emu_periph_addr(0xE000EDB8u)) // 
 
-#define SCB_CACHE_ICIALLU	(*(volatile uint32_t *)0xE000EF50)
-#define SCB_CACHE_ICIMVAU	(*(volatile uint32_t *)0xE000EF58)
-#define SCB_CACHE_DCIMVAC	(*(volatile uint32_t *)0xE000EF5C)
-#define SCB_CACHE_DCISW		(*(volatile uint32_t *)0xE000EF60)
-#define SCB_CACHE_DCCMVAU	(*(volatile uint32_t *)0xE000EF64)
-#define SCB_CACHE_DCCMVAC	(*(volatile uint32_t *)0xE000EF68)
-#define SCB_CACHE_DCCSW		(*(volatile uint32_t *)0xE000EF6C)
-#define SCB_CACHE_DCCIMVAC	(*(volatile uint32_t *)0xE000EF70)
-#define SCB_CACHE_DCCISW	(*(volatile uint32_t *)0xE000EF74)
-#define SCB_CACHE_BPIALL	(*(volatile uint32_t *)0xE000EF78)
+#define SCB_CACHE_ICIALLU	(*(volatile uint32_t *)emu_periph_addr(0xE000EF50u))
+#define SCB_CACHE_ICIMVAU	(*(volatile uint32_t *)emu_periph_addr(0xE000EF58u))
+#define SCB_CACHE_DCIMVAC	(*(volatile uint32_t *)emu_periph_addr(0xE000EF5Cu))
+#define SCB_CACHE_DCISW		(*(volatile uint32_t *)emu_periph_addr(0xE000EF60u))
+#define SCB_CACHE_DCCMVAU	(*(volatile uint32_t *)emu_periph_addr(0xE000EF64u))
+#define SCB_CACHE_DCCMVAC	(*(volatile uint32_t *)emu_periph_addr(0xE000EF68u))
+#define SCB_CACHE_DCCSW		(*(volatile uint32_t *)emu_periph_addr(0xE000EF6Cu))
+#define SCB_CACHE_DCCIMVAC	(*(volatile uint32_t *)emu_periph_addr(0xE000EF70u))
+#define SCB_CACHE_DCCISW	(*(volatile uint32_t *)emu_periph_addr(0xE000EF74u))
+#define SCB_CACHE_BPIALL	(*(volatile uint32_t *)emu_periph_addr(0xE000EF78u))
 
 // Flush data from cache to memory
 //
