@@ -147,6 +147,11 @@ set_target_properties(phz_core PROPERTIES
   VISIBILITY_INLINES_HIDDEN ON
   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
+if(APPLE)
+  # CMake names MODULE libraries .so on macOS by default; everything
+  # downstream (bundling, CoreLoader, CI checks) expects .dylib.
+  set_target_properties(phz_core PROPERTIES SUFFIX ".dylib")
+endif()
 target_compile_options(phz_core PRIVATE
   $<$<AND:$<CXX_COMPILER_ID:GNU>,$<NOT:$<PLATFORM_ID:Darwin>>>:-fno-gnu-unique>)
 if(APPLE)
