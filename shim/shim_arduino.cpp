@@ -20,7 +20,15 @@
 // We mmap zero-filled memory there so firmware register pokes (LPSPI4, IOMUXC,
 // GPIO ISR flags, DWT cycle counter, ...) are plain memory accesses.
 // ---------------------------------------------------------------------------
-__attribute__((constructor(101))) static void map_fake_peripherals() {
+// Mach-O doesn't support constructor priorities; plain constructor there
+// (ordering vs other ctors doesn't matter — nothing else touches these
+// regions before boot()).
+#ifdef __APPLE__
+__attribute__((constructor))
+#else
+__attribute__((constructor(101)))
+#endif
+static void map_fake_peripherals() {
   struct Region { uintptr_t base; size_t size; };
   static const Region regions[] = {
       {0x40000000u, 0x00400000u},  // AIPS peripherals (LPSPI, IOMUXC, CCM, TMR...)
