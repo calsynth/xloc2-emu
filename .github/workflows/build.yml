@@ -59,10 +59,17 @@ jobs:
         # No CMAKE_OSX_ARCHITECTURES here: GCC does not accept -arch; the
         # arm64 runner's GCC targets arm64 natively.
         run: |
+          set -o pipefail
           cmake -S . -B build-core-ci -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER="$GCC" -DCMAKE_CXX_COMPILER="$GXX" \
             -DXLOC2_BUILD_APP=OFF
-          cmake --build build-core-ci -j4 --target phz_core
+          cmake --build build-core-ci -j4 --target phz_core 2>&1 | tee core-build.log
+      - name: Surface compile errors (pass 1)
+        if: failure()
+        run: |
+          { echo '## Core build errors'; echo '```'; \
+            grep -n -B2 -A6 "error:" core-build.log | head -120; \
+            echo '```'; } >> "$GITHUB_STEP_SUMMARY" || true
       - name: Verify core dylib portability (no Homebrew runtime deps)
         run: |
           otool -L build-core-ci/phz_core.dylib

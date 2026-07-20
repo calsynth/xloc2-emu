@@ -54,6 +54,11 @@ target_link_libraries(xloc2 PRIVATE
 # binary. The core comes from the in-tree phz_core target, or (macOS
 # two-pass build, XLOC2_BUILD_CORE=OFF) from XLOC2_PREBUILT_CORE.
 if(APPLE)
+  # The core maps fake i.MX RT peripherals at their hardware addresses
+  # (0x40000000...), which sit inside macOS's default 4 GB __PAGEZERO.
+  # Shrink it to one page (keeps null-deref protection) so those regions
+  # are mappable.
+  target_link_options(xloc2 PRIVATE -Wl,-pagezero_size,0x4000)
   set(_core_dest "$<TARGET_BUNDLE_CONTENT_DIR:xloc2>/Resources/phz_core.dylib")
 else()
   set(_core_dest "$<TARGET_FILE_DIR:xloc2>/phz_core.so")

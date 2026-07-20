@@ -28,6 +28,7 @@ __attribute__((constructor(101))) static void map_fake_peripherals() {
       {0xE0000000u, 0x00100000u},  // ARM DWT/NVIC/SCB
   };
   for (const auto& r : regions) {
+#ifdef MAP_FIXED_NOREPLACE
     void* p = mmap((void*)r.base, r.size, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (p == MAP_FAILED && errno == EEXIST) {
@@ -38,6 +39,14 @@ __attribute__((constructor(101))) static void map_fake_peripherals() {
       p = mmap((void*)r.base, r.size, PROT_READ | PROT_WRITE,
                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     }
+#else
+    // Darwin has no MAP_FIXED_NOREPLACE; MAP_FIXED both claims the region on
+    // first load and replaces a prior core instance's mapping on hot reload.
+    // The app binary links with -Wl,-pagezero_size,0x4000 so the low 4 GB
+    // (where the i.MX RT peripherals live) is mappable at all on macOS.
+    void* p = mmap((void*)r.base, r.size, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+#endif
     if (p != (void*)r.base) {
       fprintf(stderr,
               "emu: FATAL: cannot map fake peripheral region at %p (got %p)\n",

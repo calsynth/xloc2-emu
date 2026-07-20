@@ -172,6 +172,11 @@ add_dependencies(headless phz_core)
 # dbg links the firmware statically (breakpoint-friendly single binary).
 add_executable(dbg test/dbg.cpp)
 target_link_libraries(dbg firmware_core)
+if(APPLE)
+  # allow the core's low-address fake-peripheral mappings (see app/CMakeLists)
+  target_link_options(headless PRIVATE -Wl,-pagezero_size,0x4000)
+  target_link_options(dbg PRIVATE -Wl,-pagezero_size,0x4000)
+endif()
 
 endif()  # XLOC2_BUILD_CORE
 
