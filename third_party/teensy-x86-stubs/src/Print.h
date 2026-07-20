@@ -57,6 +57,12 @@ public:
     size_t print(unsigned int n, int base)		{ return printNumber(n, 0, base); }
     size_t print(long n, int base)			{ return (base == 10) ? print(n) : printNumber(n, 0, base); }
     size_t print(unsigned long n, int base)		{ return printNumber(n, 0, base); }
+    // 64-bit overloads (Teensy core has these; on Darwin uint64_t is
+    // unsigned long long, so without them print(uint64_t) is ambiguous)
+    size_t print(long long n) { return (n < 0) ? write('-') + printNumber64((unsigned long long)(-n), 10) : printNumber64((unsigned long long)n, 10); }
+    size_t print(unsigned long long n) { return printNumber64(n, 10); }
+    size_t print(long long n, int base) { return (n < 0 && base == 10) ? write('-') + printNumber64((unsigned long long)(-n), 10) : printNumber64((unsigned long long)n, base); }
+    size_t print(unsigned long long n, int base) { return printNumber64(n, base); }
 
     size_t print(double n, int digits = 2)		{ return printFloat(n, digits); }
     size_t print(const Printable &obj)		{ return obj.printTo(*this); }
@@ -78,6 +84,10 @@ public:
     size_t println(unsigned int n, int base)	{ return print(n, base) + println(); }
     size_t println(long n, int base)		{ return print(n, base) + println(); }
     size_t println(unsigned long n, int base)	{ return print(n, base) + println(); }
+    size_t println(long long n) { return print(n) + println(); }
+    size_t println(unsigned long long n) { return print(n) + println(); }
+    size_t println(long long n, int base) { return print(n, base) + println(); }
+    size_t println(unsigned long long n, int base) { return print(n, base) + println(); }
 
     size_t println(double n, int digits = 2)	{ return print(n, digits) + println(); }
     size_t println(const Printable &obj)		{ return obj.printTo(*this) + println(); }
@@ -90,6 +100,14 @@ public:
     }
 
     //int printf(const __FlashStringHelper *format, ...);
+    size_t printNumber64(unsigned long long n, int base) {
+      if (base < 2) base = 10;
+      char buf[66];
+      int i = 65; buf[i] = 0;
+      do { buf[--i] = "0123456789abcdef"[n % (unsigned)base]; n /= (unsigned)base; } while (n);
+      return write((const uint8_t*)&buf[i], (size_t)(65 - i));
+    }
+
 protected:
     void setWriteError(int err = 1) { write_error = err; }
 private:
