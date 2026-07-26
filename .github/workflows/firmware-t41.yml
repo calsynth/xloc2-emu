@@ -1,0 +1,154 @@
+# Teensy 4.1 / XLOC2 hardware-parity build.
+#
+# Builds the SAME firmware tree the emulator runs — submodule + patches/ —
+# for the real Teensy 4.1, on every push. Two things this catches that a host
+# build never can:
+#
+#   1. Code that compiles on the host but not for ARM (host-only headers,
+#      clang-isms, anything that only worked because of the shim).
+#   2. Code that no longer FITS. The linker errors on region overflow, and
+#      teensy_size prints the FLASH / RAM1 (ITCM+DTCM) / RAM2 breakdown, which
+#      is surfaced in the run Summary so headroom is visible at a glance.
+#
+# It also uploads a flashable .hex, so "does it behave the same on hardware?"
+# is always one drag-and-drop away.
+#
+# Place at .github/workflows/firmware-t41.yml
+
+name: Firmware (Teensy 4.1)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      envs:
+        description: "PlatformIO envs to build (space separated)"
+        required: false
+        default: "T41"
+
+env:
+  # Path to the firmware submodule from the repo root.
+  FW_DIR: firmware
+  # Path to the patch set from the repo root. Leave empty if the firmware
+  # fork already has the patches applied.
+  PATCH_DIR: patches
+
+jobs:
+  build:
+    name: Build ${{ matrix.pio_env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # T4.1 / XLOC2 only. Add T41_audio here if the USB-audio build
+        # ever needs covering too.
+        pio_env: [T41]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('**/platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio
+
+      - name: Apply host-portability patches
+        # The emulator runs the patched tree, so the parity build must too.
+        # The ARM branches are guarded by __ARM_ARCH_7EM__, so this should be
+        # a no-op on hardware — if it is not, that is exactly what we want to
+        # find out here rather than after flashing.
+        run: |
+          if [ -n "${PATCH_DIR}" ] && ls ${PATCH_DIR}/*.patch >/dev/null 2>&1; then
+            cd "${FW_DIR}"
+            for p in ../${PATCH_DIR}/*.patch; do
+              echo "::group::git apply --3way $p"
+              git apply --3way "$p"
+              echo "::endgroup::"
+            done
+          else
+            echo "No patches to apply."
+          fi
+
+      - name: Build
+        id: build
+        run: |
+          set -o pipefail
+          cd "${FW_DIR}/software"
+          pio run -e "${{ matrix.pio_env }}" 2>&1 | tee "${RUNNER_TEMP}/build.log"
+
+      - name: Memory report
+        # teensy_size output looks like:
+        #   Memory Usage on Teensy 4.1:
+        #     FLASH: code:..., data:..., headers:...   free for files:...
+        #      RAM1: variables:..., code:..., padding:...   free for local variables:...
+        #      RAM2: variables:...  free for malloc/new:...
+        # Negative "free" means it does not fit; the link usually fails first,
+        # but not always for RAM1 vs RAM2 splits, so check explicitly.
+        if: always() && steps.build.outcome != 'skipped'
+        run: |
+          LOG="${RUNNER_TEMP}/build.log"
+          {
+            echo "## Teensy 4.1 memory — \`${{ matrix.pio_env }}\`"
+            echo
+            if grep -q "Memory Usage on Teensy" "$LOG"; then
+              echo '```'
+              sed -n '/Memory Usage on Teensy/,/^$/p' "$LOG"
+              echo '```'
+            else
+              echo "_No memory report produced — the build did not reach the link step._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Fail loudly on a negative "free for ..." figure.
+          if grep -oE "free for [a-z/ ]+:-[0-9]+" "$LOG"; then
+            echo "::error::Firmware does not fit on Teensy 4.1 — see the memory report above."
+            exit 1
+          fi
+
+      - name: Compiler diagnostics
+        if: always()
+        run: |
+          LOG="${RUNNER_TEMP}/build.log"
+          if grep -nE "error:|warning:" "$LOG" | head -50 > "${RUNNER_TEMP}/diags.txt" && [ -s "${RUNNER_TEMP}/diags.txt" ]; then
+            {
+              echo "## Diagnostics (first 50)"
+              echo '```'
+              cat "${RUNNER_TEMP}/diags.txt"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload flashable firmware
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xloc2-t41-${{ matrix.pio_env }}-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            ${{ env.FW_DIR }}/software/.pio/build/${{ matrix.pio_env }}/*.hex
+            ${{ env.FW_DIR }}/software/.pio/build/${{ matrix.pio_env }}/*.elf
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.pio_env }}
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore

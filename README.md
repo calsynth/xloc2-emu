@@ -21,6 +21,42 @@ voltage, so the firmware's own `Pinout_Detect()` enables the CalSynth XL configu
 - Persistent state: EEPROM, PhzConfig and a virtual SD card live in
   `~/Library/Application Support/Calsynth/XLOC2` (macOS) / `~/.config/Calsynth/XLOC2` (Linux).
 
+## Getting started
+
+### Just want to run it?
+
+No toolchain needed — the firmware core ships inside the app.
+
+1. Download the build for your platform from
+   [Releases](https://github.com/calsynth/xloc2-emu/releases)
+   (macOS Apple Silicon `.zip` or Linux x86_64 `.tar.gz`).
+2. **macOS:** unzip, then **right-click → Open** on `XLOC2.app` the first time
+   (the app is unsigned; this one-time step passes Gatekeeper). If macOS still
+   refuses, go to System Settings → Privacy & Security → **Open Anyway**.
+   **Linux:** untar and run `./XLOC2` (see the bundled `README.txt` for the
+   handful of standard desktop libraries it needs).
+3. CV/gate to and from real hardware works through any DC-coupled audio
+   interface — set it up in the routing panel.
+
+### Want to write applets?
+
+The repo has a hot **dev slot**: your applet lives in `dev/DevApplet.cpp`,
+compiles in ~1 second, and hot-reloads into the running app — no firmware
+rebuild, no hardware. Setup:
+
+```sh
+git clone https://github.com/calsynth/xloc2-emu.git
+cd xloc2-emu
+# macOS: brew install gcc cmake     Linux: sudo apt install g++ cmake
+./scripts/build-core.sh
+```
+
+That builds the firmware core and drops it in the app's cores folder — load it
+from the app's FW panel and select the applet named **Dev**. Then edit
+`dev/DevApplet.cpp`, re-run `./scripts/build-core.sh` (~1 s), and hit Reload.
+`dev/README.md` has the full loop, caveats, and how to promote a finished
+applet into the real firmware.
+
 ## Build
 
 ```sh
