@@ -34,9 +34,25 @@ EmuEngine::EmuEngine() {
 EmuEngine::~EmuEngine() { stop(); }
 
 juce::File EmuEngine::stateDir() {
+#if JUCE_MAC
+  // JUCE's userApplicationDataDirectory is ~/Library on macOS — NOT
+  // ~/Library/Application Support — so spell out the Mac-correct home.
+  // scripts/build-core.sh and the docs already point at Application Support.
+  const auto dir = juce::File::getSpecialLocation(
+                       juce::File::userApplicationDataDirectory)
+                       .getChildFile("Application Support/Calsynth/XLOC2");
+  // One-time migration from the pre-fix location, ~/Library/Calsynth/XLOC2
+  // (settings, routing.json, cores/ dropped there by older builds).
+  const auto legacy = juce::File::getSpecialLocation(
+                          juce::File::userApplicationDataDirectory)
+                          .getChildFile("Calsynth/XLOC2");
+  if (!dir.exists() && legacy.isDirectory()) legacy.copyDirectoryTo(dir);
+  return dir;
+#else
   return juce::File::getSpecialLocation(
              juce::File::userApplicationDataDirectory)
       .getChildFile("Calsynth/XLOC2");
+#endif
 }
 
 // ---------------------------------------------------------------------------

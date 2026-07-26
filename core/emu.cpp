@@ -191,11 +191,14 @@ void set_button(Button b, bool pressed) {
 // Emit quadrature so UI::Encoder::Poll (1kHz) sees each gray-code state at
 // least twice (debounce shifts 8-bit history; Read wants stable transitions).
 static void emit_detent(uint8_t pinA, uint8_t pinB, bool cw) {
-  // idle state is (1,1). CW detent: A->0, B->0, A->1 (rising edge on A with
-  // B low => +1), B->1. CCW: mirrored.
+  // idle state is (1,1); each detent walks the gray code back to (1,1).
+  // Phase order verified against a real XLOC2 (2026-07-26): the original
+  // guess decoded backwards on hardware-default calibration, so the two
+  // sequences below are the swap of that guess. +detents = clockwise, as
+  // the core API promises.
   struct Step { uint8_t a, b; };
-  static const Step cw_seq[]  = { {0,1}, {0,0}, {1,0}, {1,1} };
-  static const Step ccw_seq[] = { {1,0}, {0,0}, {0,1}, {1,1} };
+  static const Step cw_seq[]  = { {1,0}, {0,0}, {0,1}, {1,1} };
+  static const Step ccw_seq[] = { {0,1}, {0,0}, {1,0}, {1,1} };
   const Step* seq = cw ? cw_seq : ccw_seq;
   for (int s = 0; s < 4; ++s) {
     pin_set_level(pinA, seq[s].a);

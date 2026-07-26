@@ -79,6 +79,7 @@ add_library(firmware_core STATIC ${FW_SOURCES}
   shim/shim_drivers.cpp
   shim/shim_audio.cpp
   core/emu.cpp
+  dev/DevApplet.cpp
   core/emu_main.cpp
   ${STUBS}/Print.cpp
   ${STUBS}/WString.cpp

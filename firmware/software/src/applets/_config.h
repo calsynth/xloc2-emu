@@ -4,6 +4,12 @@
 
 using namespace HS;
 
+// XLOC2 emulator: hot development slot. Included BEFORE the applet_name/
+// applet_icon rewriting macros below, because DevSlot spells those out.
+#ifdef EMULATOR
+#include "DevSlot.h"
+#endif
+
 #ifdef ARDUINO_TEENSY41
 #include "ClockSetupT4.h"
 #else
@@ -134,6 +140,9 @@ using namespace HS;
 #include "../AppletRegistry.h"
 
 constexpr Registry reg = Registry<HemisphereApplet, HS::APPLET_SLOTS
+#ifdef EMULATOR
+    , DeclareApplet<DevSlot, 200, CAT_OTHER>
+#endif
     , DeclareApplet<ADSREG, 8, CAT_MODULATOR>
     , DeclareApplet<ADEG, 34, CAT_MODULATOR>
     , DeclareApplet<MiniASR, 47, CAT_MODULATOR | CAT_QUANTIZER>

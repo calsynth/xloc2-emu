@@ -18,13 +18,19 @@
 #   --name <label> label for the output file, phz_core-<label>.<ext>
 #                  (default: the ref, or git-describe of --src).
 #   -- ...         anything after -- is passed to the cmake configure step
-#                  (e.g. -- -DCMAKE_OSX_ARCHITECTURES=arm64).
+#                  (e.g. -- -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0).
+#
+# The firmware core ALWAYS builds with GCC (Teensy toolchain parity; clang
+# rejects several firmware idioms). On Linux this script picks g++
+# explicitly; on macOS it looks for Homebrew g++-NN (install with
+# `brew install gcc`) — the JUCE app itself still builds with AppleClang,
+# in a separate configure (see .github/workflows/build.yml).
 #
 # The build reuses a per-label build directory (build-core/<label>) so
 # repeated builds of the same source are incremental.
 set -euo pipefail
 
-usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 die() { echo "build-core.sh: error: $*" >&2; exit 1; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -51,6 +57,28 @@ case "$(uname -s)" in
   Darwin) EXT=".dylib"; DEFAULT_STATE="$HOME/Library/Application Support/Calsynth/XLOC2" ;;
   *)      EXT=".so";    DEFAULT_STATE="$HOME/.config/Calsynth/XLOC2" ;;
 esac
+
+# ---- compiler: the core is GCC-only ----------------------------------------
+COMPILER_ARGS=()
+if [ "$(uname -s)" = "Darwin" ]; then
+  # `g++` on macOS is AppleClang — only versioned Homebrew names are real GCC.
+  GXX="${XLOC2_GXX:-}"
+  if [ -z "$GXX" ]; then
+    for v in 16 15 14 13 12; do
+      if command -v "g++-$v" >/dev/null 2>&1; then GXX="g++-$v"; break; fi
+    done
+  fi
+  [ -z "$GXX" ] && die "no GCC found — the firmware core must be built with \
+GCC (matches the Teensy toolchain). Install it with: brew install gcc \
+(then re-run; set XLOC2_GXX=g++-NN to pick a specific version)"
+  GCC_BIN="${GXX/g++/gcc}"
+  command -v "$GCC_BIN" >/dev/null 2>&1 || GCC_BIN="$GXX"
+  echo "== Using $GXX for the core (AppleClang cannot build the firmware)"
+  COMPILER_ARGS=(-DCMAKE_C_COMPILER="$GCC_BIN" -DCMAKE_CXX_COMPILER="$GXX")
+else
+  command -v g++ >/dev/null 2>&1 || die "g++ not found (the core is GCC-only)"
+  COMPILER_ARGS=(-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++)
+fi
 
 TMPDIR_CLONE=""
 cleanup() { [ -n "$TMPDIR_CLONE" ] && rm -rf "$TMPDIR_CLONE"; }
@@ -113,6 +141,7 @@ OUT="${OUT:-$DEFAULT_STATE/cores}"
 echo "== Configuring ($BUILD)"
 cmake -S "$ROOT" -B "$BUILD" \
   -DCMAKE_BUILD_TYPE=Release \
+  "${COMPILER_ARGS[@]}" \
   -DXLOC2_BUILD_APP=OFF \
   -DXLOC2_FW_DIR="$SRC" \
   -DXLOC2_CORE_NAME="$CORE_NAME" \
