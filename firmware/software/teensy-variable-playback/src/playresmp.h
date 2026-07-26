@@ -128,6 +128,9 @@ class AudioPlayResmp : public AudioStream, public newdigate::AudioEventResponder
             return reader->getLoopType();
         }
 
+        void setBeatStart(uint16_t beatnum) {
+            reader->setBeatStart(beatnum);
+        }
         void setLoopStart(uint32_t loop_start) {
             reader->setLoopStart(loop_start);
         }
@@ -220,29 +223,36 @@ class AudioPlayResmp : public AudioStream, public newdigate::AudioEventResponder
 					data[i] = blocks[i]->data;
             }
 
-			if (gotBlocks) // enough blocks, do the transmit
-			{
-				if (reader->available()) {
-					// we can read more data from the file...
-					n = reader->read((void**)data, AUDIO_BLOCK_SAMPLES);
-					for (int channel=0; channel < _numChannels; channel++) {
-						memset( &blocks[channel]->data[n], 0, (AUDIO_BLOCK_SAMPLES - n) * 2);
-						transmit(blocks[channel], channel);
-					}
+            if (gotBlocks) // enough blocks, do the transmit
+            {
+                if (reader->available()) {
+                    // we can read more data from the file...
+                    n = reader->read((void**)data, AUDIO_BLOCK_SAMPLES);
+                    for (int channel=0; channel < _numChannels; channel++) {
+                        if (n < AUDIO_BLOCK_SAMPLES) {
+                          // end of file, fade out last block
+                          const size_t fadelen = AUDIO_BLOCK_SAMPLES - n;
+                          for (size_t i = 0; i < fadelen; ++i) {
+                            data[channel][i] = data[channel][i] * (fadelen - i) / fadelen;
+                          }
+                          memset( &blocks[channel]->data[n], 0, fadelen * 2);
+                        }
+                        transmit(blocks[channel], channel);
+                    }
 
-					if(_numChannels == 1) {
-						transmit(blocks[0], 1);
-					}
-					
-					if (AUDIO_BLOCK_SAMPLES == n) // got enough samples...
-						triggerEvent(evReload,this); // ...load more if needed
-					else
-						triggerEvent(evPause,this); // ...end of file, finish playing
-				} else {
-					triggerEvent(evClose,this);
-				}
-			}
-			
+                    if(_numChannels == 1) {
+                        transmit(blocks[0], 1);
+                    }
+
+                    if (AUDIO_BLOCK_SAMPLES == n) // got enough samples...
+                        triggerEvent(evReload,this); // ...load more if needed
+                    else
+                        triggerEvent(evPause,this); // ...end of file, finish playing
+                } else {
+                    triggerEvent(evClose,this);
+                }
+            }
+
 			// release all allocated blocks, even if there
 			// weren't enough and we couldn't transmit
             for (int channel=0; channel < _numChannels; channel++) 

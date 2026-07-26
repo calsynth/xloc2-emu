@@ -15,27 +15,26 @@ namespace newdigate {
 class indexedbuffer 
 {
 public:
-	indexedbuffer(int16_t samples, bool usePSRAM = false) 
-		: status('.'), 
-		  bufInPSRAM(usePSRAM) 
-	{ 
-		if (usePSRAM)
-			buffer = (int16_t*) extmem_malloc(samples * sizeof *buffer); 
-		else
-			buffer = new int16_t[samples]; 
-	}
-	~indexedbuffer(void) 
-	{ 
-		if (bufInPSRAM)
-			extmem_free(buffer);
-		else
-			delete [] buffer; 
-	}
-    uint32_t index;
-    int16_t buffer_size;
-	char status;
-	bool bufInPSRAM; // true if buffer points to memory allocated in PSRAM
-    int16_t *buffer;
+  indexedbuffer(int16_t samples, bool usePSRAM = false) : status('.') {
+    buffer = nullptr;
+
+    if (!usePSRAM) // prefer RAM2
+      buffer = (int16_t*)malloc(samples * sizeof *buffer);
+
+    if (!buffer) { // fallback to PSRAM
+      buffer = (int16_t*)extmem_malloc(samples * sizeof *buffer);
+      bufInPSRAM = (buffer != nullptr);
+    } else bufInPSRAM = false;
+  }
+  ~indexedbuffer(void) {
+    if (bufInPSRAM) extmem_free(buffer);
+    else free(buffer);
+  }
+  uint32_t index;
+  int16_t buffer_size;
+  char status;
+  bool bufInPSRAM; // true if buffer points to memory allocated in PSRAM
+  int16_t* buffer = nullptr;
 };
 
 
@@ -374,8 +373,6 @@ public:
 		size_t numInVector = _buffers.size();
 		size_t total = 0, loaded;
 		
-		_bufInPSRAM = bufInPSRAM;
-		
 		for (unsigned int bufn = 0; bufn < MAX_NUM_BUFFERS; bufn++)
 		{
 			indexedbuffer* buf;
@@ -463,8 +460,6 @@ protected:
     loop_type _loop_type = loop_type::looptype_none;
     uint32_t _loop_start_blocks = 0;
     uint32_t _loop_finish_blocks = 0;
-	
-	bool _bufInPSRAM = false;
 	
 	// vector of audio buffers with status etc.
 	std::vector<indexedbuffer*> _buffers;

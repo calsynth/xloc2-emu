@@ -116,9 +116,9 @@ public:
         memcpy(_filename, filename, strlen(filename) + 1);
 
         TFile file = open(_filename);
-
+		
         if (!file) {
-            Serial.printf("Not able to open file: %s\n", _filename);
+            //Serial.printf("Not able to open file: %s\n", _filename);
             if (_filename) delete [] _filename;
             _filename = nullptr;
             return false;
@@ -134,7 +134,7 @@ public:
             char buffer[32];
             size_t bytesRead = file.read(buffer, 12);
             if (bytesRead < 12) {
-                Serial.println("premature EOF!");
+                //Serial.println("premature EOF!");
                 close();
                 return false;
             }
@@ -155,13 +155,13 @@ public:
                     && buffer[2] == 't'
                     && buffer[3] == ' ' )
                 {
-                  Serial.println("Found 'fmt ' chunk!");
+                  //Serial.printf("Found 'fmt ' chunk!");
                   // found the format header, need 16 more bytes
                   bytesRead = file.read(buffer+8, 16);
                   WaveHeaderParser::parseFormatChunk(buffer, wav_header);
 
                   if (wav_header.bit_depth != 16) {
-                      Serial.printf("Needs 16 bit audio! Aborting.... (got %d)\n", wav_header.bit_depth);
+                      //Serial.printf("Needs 16 bit audio! Aborting.... (got %d)", wav_header.bit_depth);
                       return false;
                   }
                   setNumChannels(wav_header.num_channels);
@@ -171,7 +171,7 @@ public:
                      && buffer[1] == 'd'
                      && buffer[2] == '3' )
                 {
-                  Serial.println("Found 'id3' chunk");
+                  //Serial.println("Found 'id3' chunk");
 
                   size_t sz = 512;
                   char id3buf[sz];
@@ -184,7 +184,7 @@ public:
                     && buffer[2] == 'i'
                     && buffer[3] == 'd' )
                 {
-                  Serial.printf("Found 'acid' chunk, size=%u\n", chunkSize);
+                  //Serial.printf("Found 'acid' chunk, size=%u\n", chunkSize);
                   // acid chunk should always be 24 bytes, excluding 8-byte header
                   bytesRead = file.read(buffer, 24);
                   if (24 == bytesRead) {
@@ -195,7 +195,7 @@ public:
 
                 // other chunks, including "JUNK" are simply ignored
 
-                Serial.printf("Done checking chunk, size %u bytes\n", chunkSize);
+                //Serial.printf("Done checking chunk, size %u bytes\n", chunkSize);
                 dataChunkOffset += chunkSize; // includes 8-byte header size
 
                 // read in next chunk header
@@ -203,7 +203,7 @@ public:
                 bytesRead = file.read(buffer, 8);
                 if (bytesRead != 8) return false;
             }
-            Serial.printf("Found 'data' chunk at %u, size: %u bytes\n", dataChunkOffset, chunkSize);
+            //Serial.printf("Found 'data' chunk at %u, size: %u bytes", dataChunkOffset, chunkSize);
 
             if (!_tempo_bpm) {
               // check for metadata after the data chunk
@@ -217,7 +217,7 @@ public:
                      && buffer[1] == 'd'
                      && buffer[2] == '3' )
                 {
-                  Serial.println("Found 'id3' chunk after 'data'");
+                  //Serial.println("Found 'id3' chunk after 'data'");
 
                   size_t sz = 512;
                   char id3buf[sz];
@@ -239,7 +239,7 @@ public:
             if (bytesRead != 8) return false;
 
             if (!WaveHeaderParser::readDataHeader((unsigned char *)buffer, 0, data_header)) {
-                Serial.println("Not able to read header! Aborting...");
+                //Serial.println("Not able to read header! Aborting...");
                 return false;
             }
 
@@ -253,11 +253,11 @@ public:
             _play_state = STOPPED;
             if (_filename) delete [] _filename;
             _filename =  nullptr;
-            Serial.printf("Wave file contains no samples: %s\n", filename);
+            //Serial.printf("Wave file contains no samples: %s\n", filename);
             return false;
         }
 
-        //_file_samples /= _numChannels;
+        _file_samples /= _numChannels;
         _loop_start = 0;
         _loop_finish = _file_samples;
 
@@ -778,7 +778,18 @@ public:
     void setHeaderSizeInBytes(uint32_t headerSizeInBytes) {
         _header_offset = headerSizeInBytes / 2;
     }
-    
+
+    void setBeatStart(uint16_t beatnum) {
+        if (_tempo_bpm == 0.0) {
+          _play_start = play_start::play_start_sample;
+          _playback_start = 0;
+          return;
+        }
+        const int samples_per_beat = _file_sample_rate * 60 / _tempo_bpm;
+        _play_start = play_start::play_start_arbitrary;
+        _playback_start = samples_per_beat * beatnum;
+    }
+
     void setPlayStart(play_start start, uint32_t playback_start) {
         _play_start = start;
         _playback_start = playback_start;

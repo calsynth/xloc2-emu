@@ -94,8 +94,11 @@ it is a porting aid, not firmware:
 (the WAV-player audio applets include `<TeensyVariablePlayback.h>` from it);
 vendoring the firmware flattened it to an empty directory, which broke the
 Teensy 4.1 CI cross-build. Vendored 2026-07-26 from
-https://github.com/djphazer/teensy-variable-playback branch `debug`,
-commit `f7080140d4a16a8f7ccd5767c61772b12fe87ad7` — `src/` plus license and
-library metadata only (tests/examples/docs omitted). The emulator does not
+https://github.com/djphazer/teensy-variable-playback at commit
+`b36ca5155023a5dccc94f3116741470706e4194e` — the exact submodule pin of
+upstream O_C-Phazerville PSv2.0.1 (`git ls-tree PSv2.0.1 software/`), which
+is what the firmware compiles against (the `debug` branch head was tried
+first and lacks `setBeatStart()`, breaking the T41 build). `src/` plus
+license and library metadata only (tests/examples/docs omitted). The emulator does not
 compile it: `shim/TeensyVariablePlayback.h` stubs the header on host, and
 the directory is not on the emulator's include path.
