@@ -87,3 +87,15 @@ it is a porting aid, not firmware:
   buffer. On host, `millis()/micros()` (outside ISR context) advance virtual
   time until the frame buffer drains (`emu::host_pump()`), which is what the
   background ISRs would have done on hardware.
+
+# Vendored dependency: teensy-variable-playback
+
+`firmware/software/teensy-variable-playback/` is a git submodule upstream
+(the WAV-player audio applets include `<TeensyVariablePlayback.h>` from it);
+vendoring the firmware flattened it to an empty directory, which broke the
+Teensy 4.1 CI cross-build. Vendored 2026-07-26 from
+https://github.com/djphazer/teensy-variable-playback branch `debug`,
+commit `f7080140d4a16a8f7ccd5767c61772b12fe87ad7` — `src/` plus license and
+library metadata only (tests/examples/docs omitted). The emulator does not
+compile it: `shim/TeensyVariablePlayback.h` stubs the header on host, and
+the directory is not on the emulator's include path.
