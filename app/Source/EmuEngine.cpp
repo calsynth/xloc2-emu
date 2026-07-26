@@ -571,12 +571,90 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
     // ---- internal test-bench generators + wav player ----
     applyGenerators(b, wd.get(), dtSample);
 
+    // ---- audio graph input: device sample -> engine 44.1 kHz frames ----
+    // Linear interpolation between the previous and current device samples
+    // at each 44.1 kHz grid point crossed by this device sample.
+    {
+      float curL = 0.0f, curR = 0.0f;
+      const auto& mL = r.audioIn[0];
+      const auto& mR = r.audioIn[1];
+      if (mL.deviceChannel >= 0 && mL.deviceChannel < numIn)
+        curL = (in[mL.deviceChannel][s] * r.inFullScaleVolts * mL.gain +
+                mL.offsetVolts) / r.audioFullScaleVolts;
+      if (mR.deviceChannel >= 0 && mR.deviceChannel < numIn)
+        curR = (in[mR.deviceChannel][s] * r.inFullScaleVolts * mR.gain +
+                mR.offsetVolts) / r.audioFullScaleVolts;
+      if ((s & 63) == 0) {
+        audioInMeter_[0].store(curL, std::memory_order_relaxed);
+        audioInMeter_[1].store(curR, std::memory_order_relaxed);
+      }
+      const double ratio = 44100.0 * usPerSample_ * 1e-6;  // engine/device
+      audioInPhase_ += ratio;
+      int n = (int)audioInPhase_;
+      if (n > 0) {
+        audioInPhase_ -= (double)n;
+        float frames[16 * 2];
+        if (n > 16) n = 16;  // ratio is ~1; never remotely near 16
+        for (int k = 0; k < n; ++k) {
+          const float t = (float)((k + 1) / (double)n);  // toward current
+          frames[k * 2] = audioInPrev_[0] + (curL - audioInPrev_[0]) * t;
+          frames[k * 2 + 1] = audioInPrev_[1] + (curR - audioInPrev_[1]) * t;
+        }
+        api_->audio_in_write(frames, n);
+      }
+      audioInPrev_[0] = curL;
+      audioInPrev_[1] = curR;
+    }
+
     // ---- advance firmware time by one sample ----
     usAccum_ += usPerSample_;
     const auto whole = (uint64_t)usAccum_;
     if (whole > 0) {
       api_->step_us(whole);
       usAccum_ -= (double)whole;
+    }
+
+    // ---- audio graph output: engine 44.1 kHz frames -> device sample ----
+    {
+      const auto& mL = r.audioOut[0];
+      const auto& mR = r.audioOut[1];
+      const bool wantL = mL.deviceChannel >= 0 && mL.deviceChannel < numOut;
+      const bool wantR = mR.deviceChannel >= 0 && mR.deviceChannel < numOut;
+      if (wantL || wantR) {
+        const double ratio = 44100.0 * usPerSample_ * 1e-6;
+        if (!audioOutPrimed_) {
+          float f[2] = {0, 0};
+          api_->audio_out_read(f, 1);
+          audioOutCur_[0] = f[0];
+          audioOutCur_[1] = f[1];
+          audioOutPrimed_ = true;
+        }
+        audioOutPhase_ += ratio;
+        while (audioOutPhase_ >= 1.0) {
+          audioOutPhase_ -= 1.0;
+          audioOutPrev_[0] = audioOutCur_[0];
+          audioOutPrev_[1] = audioOutCur_[1];
+          float f[2] = {0, 0};
+          api_->audio_out_read(f, 1);
+          audioOutCur_[0] = f[0];
+          audioOutCur_[1] = f[1];
+        }
+        const float t = (float)audioOutPhase_;
+        const float outL = audioOutPrev_[0] + (audioOutCur_[0] - audioOutPrev_[0]) * t;
+        const float outR = audioOutPrev_[1] + (audioOutCur_[1] - audioOutPrev_[1]) * t;
+        if (wantL)
+          out[mL.deviceChannel][s] +=
+              (outL * r.audioFullScaleVolts * mL.gain + mL.offsetVolts) /
+              r.outFullScaleVolts;
+        if (wantR)
+          out[mR.deviceChannel][s] +=
+              (outR * r.audioFullScaleVolts * mR.gain + mR.offsetVolts) /
+              r.outFullScaleVolts;
+        if ((s & 63) == 0) {
+          audioOutMeter_[0].store(outL, std::memory_order_relaxed);
+          audioOutMeter_[1].store(outR, std::memory_order_relaxed);
+        }
+      }
     }
 
     // ---- outputs: firmware DAC (ZOH) -> volts -> samples ----

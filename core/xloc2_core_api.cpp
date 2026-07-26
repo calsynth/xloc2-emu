@@ -50,6 +50,15 @@ void api_screenshot_pbm(const char* path) {
 
 void api_eeprom_flush() { emu::eeprom_flush(); }
 
+void api_audio_in_write(const float* lr, int frames) {
+  if (lr != nullptr && frames > 0) emu::audio_in_write(lr, frames);
+}
+void api_audio_out_read(float* lr, int frames) {
+  if (lr != nullptr && frames > 0) emu::audio_out_read(lr, frames);
+}
+int api_audio_running() { return emu::audio_engine_running() ? 1 : 0; }
+int api_audio_out_available() { return emu::audio_out_available(); }
+
 }  // namespace
 
 extern "C" __attribute__((visibility("default")))
@@ -73,6 +82,10 @@ const Xloc2CoreApi* xloc2_core_get_api(void) {
       api_screen_dirty,
       api_screenshot_pbm,
       api_eeprom_flush,
+      api_audio_in_write,
+      api_audio_out_read,
+      api_audio_running,
+      api_audio_out_available,
   };
   return &api;
 }

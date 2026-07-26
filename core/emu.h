@@ -25,6 +25,24 @@ uint64_t now_us();
 int timer_register(void (*cb)(), double period_us);
 void timer_unregister(int slot);
 
+// ---- ISR lock (AudioNoInterrupts / graph edits vs the audio update) ----
+// Recursive; the core is effectively single-threaded so this is cheap.
+void isr_lock();
+void isr_unlock();
+
+// ---- audio engine (Teensy AudioStream host port; shim_audiostream.cpp) ----
+// Engine side: 128-sample int16 blocks at 44.1 kHz of *virtual* time,
+// pumped by a timer registered on first use. Host side: float rings.
+void audio_engine_start();          // idempotent; registers the update timer
+bool audio_engine_running();
+// Engine <-> ring transfer (called by the I2S bridge inside updates).
+void audio_out_push(const int16_t* left, const int16_t* right, int n);
+void audio_in_pull(int16_t* left, int16_t* right, int n);  // zero-fills on underrun
+// Host frontend transfer: interleaved stereo float frames, ±1.0 full scale.
+void audio_in_write(const float* lr, int frames);
+void audio_out_read(float* lr, int frames);                // zero-fills on underrun
+int audio_out_available();                                 // frames buffered
+
 // ---- panel controls (XLOC2: 2 encoders w/ push, buttons A/B/X/Y/Z, 4 trigs) ----
 enum Button { BUTTON_A, BUTTON_B, BUTTON_X, BUTTON_Y, BUTTON_Z,
               ENC_L_PUSH, ENC_R_PUSH };

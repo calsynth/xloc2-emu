@@ -4,6 +4,8 @@
 #include "emu_internal.h"
 
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -352,6 +354,106 @@ void boot(const std::string& state_dir) {
   // TR1..4 (0, 1, 23, 22) idle LOW (active high on XLOC2 hardware).
 
   firmware_setup();
+}
+
+
+// ---------------------------------------------------------------------------
+// ISR lock + audio engine clocking + I2S rings (Teensy AudioStream host port)
+// Ported from xloc-vcv. The lock is recursive and function-local-static so
+// it is valid during static init (AudioIO.cpp constructs I2S globals at
+// module load, before other TUs' statics are guaranteed built).
+// ---------------------------------------------------------------------------
+static std::recursive_mutex& isr_mutex() {
+  static std::recursive_mutex m;
+  return m;
+}
+void isr_lock() { isr_mutex().lock(); }
+void isr_unlock() { isr_mutex().unlock(); }
+
+extern "C" void xemu_audio_update_all();  // shim_audiostream.cpp
+
+namespace {
+// Ring of stereo int16 frames @44.1k (virtual time). All access under the
+// ISR mutex (engine side runs inside timers; the host frontend locks).
+struct AudioRing {
+  static constexpr int kCap = 16384;  // frames (~0.37 s)
+  int16_t l[kCap];
+  int16_t r[kCap];
+  int head = 0, tail = 0, count = 0;
+
+  void push(int16_t sl, int16_t sr) {
+    if (count == kCap) {  // overrun: drop oldest
+      tail = (tail + 1) % kCap;
+      --count;
+    }
+    l[head] = sl;
+    r[head] = sr;
+    head = (head + 1) % kCap;
+    ++count;
+  }
+  bool pop(int16_t& sl, int16_t& sr) {
+    if (!count) return false;
+    sl = l[tail];
+    sr = r[tail];
+    tail = (tail + 1) % kCap;
+    --count;
+    return true;
+  }
+};
+
+AudioRing& out_ring() { static AudioRing r; return r; }  // engine -> frontend
+AudioRing& in_ring()  { static AudioRing r; return r; }  // frontend -> engine
+std::atomic<bool> g_audio_running{false};
+}  // namespace
+
+bool audio_engine_running() { return g_audio_running.load(); }
+
+void audio_engine_start() {
+  if (g_audio_running.exchange(true)) return;
+  // 128 samples @44100 Hz = 2902.49433 us; sub-ppm rounding is absorbed by
+  // the rings (the host audio device clock is authoritative).
+  timer_register([] { xemu_audio_update_all(); }, 2902.4943310657596);
+}
+
+void audio_out_push(const int16_t* left, const int16_t* right, int n) {
+  std::lock_guard<std::recursive_mutex> lk(isr_mutex());
+  for (int i = 0; i < n; ++i)
+    out_ring().push(left ? left[i] : 0, right ? right[i] : 0);
+}
+
+void audio_in_pull(int16_t* left, int16_t* right, int n) {
+  std::lock_guard<std::recursive_mutex> lk(isr_mutex());
+  for (int i = 0; i < n; ++i) {
+    int16_t sl = 0, sr = 0;
+    in_ring().pop(sl, sr);
+    if (left) left[i] = sl;
+    if (right) right[i] = sr;
+  }
+}
+
+void audio_out_read(float* lr, int frames) {
+  std::lock_guard<std::recursive_mutex> lk(isr_mutex());
+  for (int i = 0; i < frames; ++i) {
+    int16_t sl = 0, sr = 0;
+    out_ring().pop(sl, sr);
+    lr[i * 2] = (float)sl / 32768.f;
+    lr[i * 2 + 1] = (float)sr / 32768.f;
+  }
+}
+
+void audio_in_write(const float* lr, int frames) {
+  std::lock_guard<std::recursive_mutex> lk(isr_mutex());
+  for (int i = 0; i < frames; ++i) {
+    float fl = lr[i * 2], fr = lr[i * 2 + 1];
+    if (fl > 1.f) fl = 1.f; else if (fl < -1.f) fl = -1.f;
+    if (fr > 1.f) fr = 1.f; else if (fr < -1.f) fr = -1.f;
+    in_ring().push((int16_t)(fl * 32767.f), (int16_t)(fr * 32767.f));
+  }
+}
+
+int audio_out_available() {
+  std::lock_guard<std::recursive_mutex> lk(isr_mutex());
+  return out_ring().count;
 }
 
 }  // namespace emu

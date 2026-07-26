@@ -59,6 +59,11 @@ struct RoutingConfig {
   std::array<JackRouting, 4> trigIn;   // device input channel -> trigger in
   float trigRiseVolts = 1.6f;          // comparator with hysteresis
   float trigFallVolts = 0.8f;
+  // Audio graph L/R (firmware I2S codec), +/-1.0 engine <-> audioFullScaleVolts
+  // at the interface. Unrouted by default; assign device channels to use.
+  std::array<JackRouting, 2> audioOut; // engine out L/R -> device output
+  std::array<JackRouting, 2> audioIn;  // device input -> engine in L/R
+  float audioFullScaleVolts = 5.0f;    // engine 1.0 == this many volts
 };
 
 // ---- built-in test bench (signal generators + scope) ----
@@ -330,6 +335,18 @@ class EmuEngine : public juce::AudioIODeviceCallback {
 
   double usPerSample_ = 1e6 / 48000.0;
   double usAccum_ = 0.0;
+
+  // ---- audio graph bridge (device rate <-> engine 44.1 kHz, linear SRC) ----
+  // ratio = engine frames per device sample; phase accumulators carry the
+  // fractional position across callbacks.
+  double audioInPhase_ = 0.0;
+  double audioOutPhase_ = 0.0;
+  float audioInPrev_[2] = {0, 0};   // last device sample (interp source)
+  float audioOutPrev_[2] = {0, 0};  // previous engine frame
+  float audioOutCur_[2] = {0, 0};   // current engine frame
+  bool audioOutPrimed_ = false;
+  std::array<std::atomic<float>, 2> audioOutMeter_{};
+  std::array<std::atomic<float>, 2> audioInMeter_{};
   bool booted_ = false;   // core loaded AND boot() has run
   bool started_ = false;  // start() has run (audio/fallback clocks active)
 

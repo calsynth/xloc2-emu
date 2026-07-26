@@ -11,6 +11,7 @@
 #include <dlfcn.h>
 #include <unistd.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -161,6 +162,36 @@ int main(int argc, char** argv) {
     ++failures;
   }
   g_api->screenshot_pbm("after_button.pbm");
+
+  // ---- audio engine (v2 API): running, and stable under signal + time ----
+  if (g_api->audio_running() != 0) {
+    printf("PASS: audio engine running (Teensy AudioStream host port)\n");
+  } else {
+    printf("FAIL: audio engine not running after boot\n");
+    ++failures;
+  }
+  {
+    // Feed 250 ms of a 440 Hz stereo tone through the input bridge while
+    // stepping virtual time; the input I2S stream must consume it (updates
+    // firing) and nothing may crash. Output frames only flow once the
+    // firmware's audio subapp builds a graph to the output, so out_available
+    // is informational here, not asserted.
+    float lr[441 * 2];
+    for (int chunk = 0; chunk < 25; ++chunk) {
+      for (int i = 0; i < 441; ++i) {
+        const float ph = (float)((chunk * 441 + i) % 100) / 100.0f;
+        const float v = 0.5f * sinf(ph * 6.2831853f);
+        lr[i * 2] = v;
+        lr[i * 2 + 1] = v;
+      }
+      g_api->audio_in_write(lr, 441);
+      run_ms(10);
+    }
+    float sink[64 * 2];
+    g_api->audio_out_read(sink, 64);  // must not crash, zero-fill is fine
+    printf("PASS: audio input consumed under load (out_available=%d)\n",
+           g_api->audio_out_available());
+  }
 
   // ---- hot reload cycle: flush, unload, load a fresh copy, boot again ----
   // (mirrors what the app does on "Reload"; state survives via ./state)

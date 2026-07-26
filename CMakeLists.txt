@@ -66,7 +66,6 @@ set(FW_EXCLUDES
   # replaced by shim/driver emulations
   ${FW}/src/drivers/SH1106_128x64_driver.cpp
   ${FW}/OC_ADC.cpp
-  ${FW}/AudioIO.cpp
   ${FW}/Main.cpp
 )
 list(REMOVE_ITEM FW_SOURCES ${FW_EXCLUDES})
@@ -74,20 +73,52 @@ list(REMOVE_ITEM FW_SOURCES ${FW_EXCLUDES})
 list(FILTER FW_SOURCES EXCLUDE REGEX "src/drivers/ADC/")
 list(FILTER FW_SOURCES EXCLUDE REGEX "src/drivers/FreqMeasure/")
 
-add_library(firmware_core STATIC ${FW_SOURCES}
+# Vendored Teensy Audio library subset (real DSP; see
+# third_party/teensy-audio/README.md for provenance and host patches).
+set(TA ${CMAKE_SOURCE_DIR}/third_party/teensy-audio)
+set(TA_SOURCES
+  ${TA}/synth_waveform.cpp
+  ${TA}/synth_dc.cpp
+  ${TA}/synth_whitenoise.cpp
+  ${TA}/synth_pinknoise.cpp
+  ${TA}/synth_karplusstrong.cpp
+  ${TA}/filter_variable.cpp
+  ${TA}/filter_ladder.cpp
+  ${TA}/filter_biquad.cpp
+  ${TA}/mixer.cpp
+  ${TA}/effect_freeverb.cpp
+  ${TA}/effect_wavefolder.cpp
+  ${TA}/effect_delay.cpp
+  ${TA}/analyze_peak.cpp
+  ${TA}/analyze_rms.cpp
+  ${TA}/analyze_notefreq.cpp
+  ${TA}/record_queue.cpp
+  ${TA}/play_queue.cpp
+  ${TA}/data_waveforms.c
+  ${TA}/data_bandlimit_step.c
+)
+
+add_library(firmware_core STATIC ${FW_SOURCES} ${TA_SOURCES}
   shim/shim_arduino.cpp
   shim/shim_drivers.cpp
   shim/shim_audio.cpp
+  shim/shim_audiostream.cpp
+  shim/shim_audio_io.cpp
   core/emu.cpp
-  dev/DevApplet.cpp
   core/emu_main.cpp
   ${STUBS}/Print.cpp
   ${STUBS}/WString.cpp
   ${STUBS}/Stream.cpp
   ${STUBS}/hardware_serial.cpp
-  ${STUBS}/AudioStream.cpp
   ${STUBS}/digital.cpp
 )
+
+# Fast applet development slot (see dev/README.md): its own TU so editing an
+# applet costs ~1 s, not a full firmware rebuild. Present in working trees
+# that carry the DevSlot changes; harmless to skip elsewhere.
+if(EXISTS ${CMAKE_SOURCE_DIR}/dev/DevApplet.cpp)
+  target_sources(firmware_core PRIVATE dev/DevApplet.cpp)
+endif()
 
 # The static lib is linked into the phz_core MODULE: build it PIC with hidden
 # visibility so the module exports only its single C entry point.
@@ -99,6 +130,7 @@ set_target_properties(firmware_core PROPERTIES
 
 target_include_directories(firmware_core BEFORE PUBLIC
   ${CMAKE_SOURCE_DIR}/shim        # our shims win over stubs where both exist
+  ${TA}                           # real Teensy Audio headers (after shims)
   ${STUBS}
   ${FW}
   ${FW}/extern
@@ -106,6 +138,7 @@ target_include_directories(firmware_core BEFORE PUBLIC
 
 target_compile_definitions(firmware_core PUBLIC
   EMULATOR
+  XEMU_HOST_DSP                   # teensy-audio: take the intrinsics DSP paths
   ARDUINO_TEENSY41
   __IMXRT1062__
   TEENSYDUINO=159

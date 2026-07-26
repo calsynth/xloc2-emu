@@ -57,6 +57,9 @@ void saveRoutingState(const RoutingConfig& cfg, juce::AudioDeviceManager& dm) {
   o->setProperty("cvOut", jackArrayToVar(cfg.cvOut));
   o->setProperty("cvIn", jackArrayToVar(cfg.cvIn));
   o->setProperty("trigIn", jackArrayToVar(cfg.trigIn));
+  o->setProperty("audioOut", jackArrayToVar(cfg.audioOut));
+  o->setProperty("audioIn", jackArrayToVar(cfg.audioIn));
+  o->setProperty("audioFullScaleVolts", cfg.audioFullScaleVolts);
   if (auto xml = dm.createStateXml())
     o->setProperty("audioDevice", xml->toString());
 
@@ -82,6 +85,9 @@ bool loadRoutingState(RoutingConfig& cfg, juce::String& audioDeviceXml) {
   jackArrayFromVar(o->getProperty("cvOut"), cfg.cvOut);
   jackArrayFromVar(o->getProperty("cvIn"), cfg.cvIn);
   jackArrayFromVar(o->getProperty("trigIn"), cfg.trigIn);
+  jackArrayFromVar(o->getProperty("audioOut"), cfg.audioOut);
+  jackArrayFromVar(o->getProperty("audioIn"), cfg.audioIn);
+  cfg.audioFullScaleVolts = num("audioFullScaleVolts", cfg.audioFullScaleVolts);
   audioDeviceXml = o->getProperty("audioDevice").toString();
   return true;
 }
@@ -232,6 +238,10 @@ RoutingPanel::RoutingPanel(EmuEngine& engine)
   for (int i = 0; i < 4; ++i)
     rows_.add(new Row(*this, (JackId)((int)JackId::TrigIn1 + i),
                       "TR " + juce::String(i + 1), false));
+  rows_.add(new Row(*this, JackId::AudioOutL, "AUD OUT L", true));
+  rows_.add(new Row(*this, JackId::AudioOutR, "AUD OUT R", true));
+  rows_.add(new Row(*this, JackId::AudioInL, "AUD IN L", false));
+  rows_.add(new Row(*this, JackId::AudioInR, "AUD IN R", false));
   for (auto* r : rows_) tableContent_.addAndMakeVisible(r);
 
   viewport_.setViewedComponent(&tableContent_, false);
@@ -273,7 +283,11 @@ void RoutingPanel::refreshFromEngine() {
   const auto cfg = engine_.getRouting();
   for (auto* r : rows_) {
     const int id = (int)r->id();
-    if (id >= (int)JackId::TrigIn1)
+    if (id >= (int)JackId::AudioInL)
+      r->setFrom(cfg.audioIn[(size_t)(id - (int)JackId::AudioInL)]);
+    else if (id >= (int)JackId::AudioOutL)
+      r->setFrom(cfg.audioOut[(size_t)(id - (int)JackId::AudioOutL)]);
+    else if (id >= (int)JackId::TrigIn1)
       r->setFrom(cfg.trigIn[(size_t)(id - (int)JackId::TrigIn1)]);
     else if (id >= (int)JackId::CvIn1)
       r->setFrom(cfg.cvIn[(size_t)(id - (int)JackId::CvIn1)]);
@@ -292,7 +306,11 @@ void RoutingPanel::pushToEngine() {
   RoutingConfig cfg = engine_.getRouting();
   for (auto* r : rows_) {
     const int id = (int)r->id();
-    if (id >= (int)JackId::TrigIn1)
+    if (id >= (int)JackId::AudioInL)
+      cfg.audioIn[(size_t)(id - (int)JackId::AudioInL)] = r->get();
+    else if (id >= (int)JackId::AudioOutL)
+      cfg.audioOut[(size_t)(id - (int)JackId::AudioOutL)] = r->get();
+    else if (id >= (int)JackId::TrigIn1)
       cfg.trigIn[(size_t)(id - (int)JackId::TrigIn1)] = r->get();
     else if (id >= (int)JackId::CvIn1)
       cfg.cvIn[(size_t)(id - (int)JackId::CvIn1)] = r->get();

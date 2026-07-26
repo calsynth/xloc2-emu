@@ -113,7 +113,9 @@ The app is unsigned; on first launch right-click → Open to pass Gatekeeper.
 
 - [x] Firmware core native build + headless tests
 - [x] Desktop app: panel, OLED, controls, CV routing (Linux-verified; macOS via CI)
-- [ ] Audio applets DSP (currently compile but are silent stubs) — port Teensy
-      AudioStream scheduling + DSP, map I2S stereo audio to interface channels
+- [x] Audio applets DSP — real Teensy AudioStream engine + vendored PJRC Audio
+      library (ported from the proven calsynth/xloc-vcv implementation); the
+      audio graph's I2S L/R bridge to interface channels via the routing matrix
+      (AUD IN/OUT rows)
 - [ ] MIDI (DIN + USB) to host MIDI ports
 - [ ] Panel-art skin from real XLOC2 faceplate graphics

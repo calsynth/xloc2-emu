@@ -14,7 +14,7 @@
 
 #include <stdint.h>
 
-#define XLOC2_CORE_API_VERSION 1u
+#define XLOC2_CORE_API_VERSION 2u
 
 // Panel buttons. Values match emu::Button (static_asserted in the impl).
 enum {
@@ -65,6 +65,15 @@ typedef struct Xloc2CoreApi {
 
   // ---- persistence ----
   void (*eeprom_flush)(void);  // write state_dir/eeprom.bin if dirty
+
+  // ---- audio (v2; Teensy AudioStream engine at 44.1 kHz virtual time) ----
+  // Interleaved stereo float frames, +/-1.0 full scale. The engine consumes
+  // input and produces output as virtual time advances via step_us; the host
+  // resamples between the device rate and the engine's fixed 44.1 kHz.
+  void (*audio_in_write)(const float* lr, int frames);
+  void (*audio_out_read)(float* lr, int frames);  // zero-fills on underrun
+  int (*audio_running)(void);   // 1 once the firmware built its audio graph
+  int (*audio_out_available)(void);  // frames buffered engine->host
 } Xloc2CoreApi;
 
 // The core module's sole exported entry point. The returned struct is static,

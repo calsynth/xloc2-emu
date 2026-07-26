@@ -369,21 +369,5 @@ void FreqMeasureClass::end() { running = false; }
 void FreqMeasureClass::isr() {}
 /*static*/ FreqMeasureClass* FreqMeasureClass::pin_inst[4];
 
-// ---------------------------------------------------------------------------
-// AudioIO (AudioIO.cpp excluded — no audio hardware yet)
-// ---------------------------------------------------------------------------
-namespace OC {
-namespace AudioIO {
-
-static AudioInputI2S2 dummy_input;
-static AudioOutputI2S2 dummy_output;
-
-AudioStream& InputStream(int interface) {
-  (void)interface;
-  return dummy_input;
-}
-AudioStream& OutputStream() { return dummy_output; }
-void Init() {}
-
-}  // namespace AudioIO
-}  // namespace OC
+// OC::AudioIO now comes from the real firmware AudioIO.cpp (compiled since
+// the audio engine port); the dummy streams that used to live here are gone.
