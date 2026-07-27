@@ -386,9 +386,13 @@ void EmuEngine::applyGenerators(const TestBenchConfig& b, const WavData* wav,
     }
   }
 
-  // ---- wav player: file samples -> CV-in jack, resampled at the quantum ----
+  // ---- wav player: file samples -> CV-in jack (dest 0..7) or the audio
+  // graph input (dest 8 = Aud L, 9 = Aud R, 10 = both), resampled at the
+  // quantum ----
+  wavAudioVolts_[0] = 0.0f;
+  wavAudioVolts_[1] = 0.0f;
   if (wav != nullptr && !wav->mono.empty() && wav->sampleRate > 0.0 &&
-      b.wav.dest >= 0 && b.wav.dest < 8) {
+      b.wav.dest >= 0 && b.wav.dest <= 10) {
     const double n = (double)wav->mono.size();
     const double sk = wavSeek_.exchange(-1.0, std::memory_order_relaxed);
     if (sk >= 0.0) wavPos_ = juce::jlimit(0.0, n, sk * wav->sampleRate);
@@ -403,9 +407,14 @@ void EmuEngine::applyGenerators(const TestBenchConfig& b, const WavData* wav,
                                      : (b.wav.loop ? 0 : i0)];
       const float samp = s0 + (s1 - s0) * frac;  // linear interpolation
       const float v = samp * b.wav.peakVolts;
-      api_->set_cv_in(b.wav.dest, v);
-      cvInNow_[(size_t)b.wav.dest] = v;
-      cvInMeter_[(size_t)b.wav.dest].store(v, std::memory_order_relaxed);
+      if (b.wav.dest < 8) {
+        api_->set_cv_in(b.wav.dest, v);
+        cvInNow_[(size_t)b.wav.dest] = v;
+        cvInMeter_[(size_t)b.wav.dest].store(v, std::memory_order_relaxed);
+      } else {
+        if (b.wav.dest == 8 || b.wav.dest == 10) wavAudioVolts_[0] = v;
+        if (b.wav.dest == 9 || b.wav.dest == 10) wavAudioVolts_[1] = v;
+      }
 
       // feed the monitor ring with exactly what the module hears
       // (normalised back to +-1 by the peak level)
@@ -584,6 +593,9 @@ void EmuEngine::audioDeviceIOCallbackWithContext(
       if (mR.deviceChannel >= 0 && mR.deviceChannel < numIn)
         curR = (in[mR.deviceChannel][s] * r.inFullScaleVolts * mR.gain +
                 mR.offsetVolts) / r.audioFullScaleVolts;
+      // test-bench wav player targeting the audio inputs mixes in here
+      curL += wavAudioVolts_[0] / r.audioFullScaleVolts;
+      curR += wavAudioVolts_[1] / r.audioFullScaleVolts;
       if ((s & 63) == 0) {
         audioInMeter_[0].store(curL, std::memory_order_relaxed);
         audioInMeter_[1].store(curR, std::memory_order_relaxed);

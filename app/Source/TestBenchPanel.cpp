@@ -728,9 +728,11 @@ TestBenchPanel::TestBenchPanel(EmuEngine& engine) : engine_(engine) {
     wavDest_.addItem("CV In " + juce::String(i + 1), i + 2);
   wavDest_.addItem("Audio In L", 10);
   wavDest_.addItem("Audio In R", 11);
-  wavDest_.setItemEnabled(10, false);  // audio applets in a later phase
-  wavDest_.setItemEnabled(11, false);
-  wavDest_.setTooltip("Destination jack (Audio In: audio applets in a later phase)");
+  wavDest_.addItem("Audio In L+R", 12);
+  wavDest_.setTooltip(
+      "Destination jack. CV In: file plays as audio-rate CV. Audio In: file "
+      "feeds the firmware's audio graph (select an audio applet chain with "
+      "Input, and route AUD OUT in the routing panel to hear the result)");
   wavDest_.setSelectedId(1, juce::dontSendNotification);
   wavDest_.onChange = [this] { pushToEngine(); };
   content_.addAndMakeVisible(wavDest_);

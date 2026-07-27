@@ -342,6 +342,9 @@ class EmuEngine : public juce::AudioIODeviceCallback {
   double audioInPhase_ = 0.0;
   double audioOutPhase_ = 0.0;
   float audioInPrev_[2] = {0, 0};   // last device sample (interp source)
+  // test-bench wav player -> audio graph input (volts; set by
+  // applyGenerators each quantum when wav.dest targets Audio In)
+  float wavAudioVolts_[2] = {0, 0};
   float audioOutPrev_[2] = {0, 0};  // previous engine frame
   float audioOutCur_[2] = {0, 0};   // current engine frame
   bool audioOutPrimed_ = false;
